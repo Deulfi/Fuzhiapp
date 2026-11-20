@@ -1,6 +1,6 @@
 # Amp Control for Wuzhi Bluetooth amplifiers
 
-A small web app that controls Wuzhi amplifier boards (tested on the **ZK-502MT**) over Bluetooth, as a replacement for the official "Wuzhi Audio" Android app. It runs in the browser, needs no account and asks for no permissions beyond Bluetooth access to the amp.
+A small web app that controls Wuzhi amplifier boards (tested on the **ZK-502MT**) over Bluetooth, as a replacement for the official "Wuzhi Audio" Android app. It runs in the browser, needs no account and asks for no permissions beyond Bluetooth access to the amp (on Android the browser needs the "Nearby devices" permission to find the amp).
 
 **Open the app:** https://deulfi.github.io/Fuzhiapp/
 
@@ -12,8 +12,8 @@ Works in Chrome and Edge on Android, Windows, macOS, Linux and ChromeOS. It does
 - **Gain:** the amp's volume, 0–30 on the ZK-502MT. It changes in small steps, never in one jump.
 - **Equalizer:** the six presets (Normal, Rock, Pop, Classical, Jazz, Country) and your own 10-band curve.
 - **Profiles:** save source, gain and EQ under a name and apply them with one tap, or automatically when the app connects.
-- **AUX priority:** if the amp jumps to Bluetooth while you're listening on AUX, the app switches it back.
-- **Settings:** beep on/off and volume, Bluetooth name, disconnecting a phone's audio, an activity log.
+- **AUX priority:** The amp switches to Bluetooth on connecting even while you're listening on AUX, the app switches it back.
+- **Settings:** beep on/off (Bluetooth connection sounds) and volume, Bluetooth name, disconnecting a phone's audio, an activity log.
 
 The app also shows changes made elsewhere, such as plugging in the AUX cable or a phone connecting.
 
@@ -27,15 +27,22 @@ You can install it like an app from the browser menu ("Install app" or "Add to H
 
 Connecting the app is separate from pairing your phone for music. The app uses its own Bluetooth connection, so your phone can play music to the amp while the app is connected, and the app can run on a different device than the one playing.
 
+## Browser setup
+
+Chrome and Edge work without changes. A few things help or are needed in some cases:
+
+**Nearby devices permission (Android).** The browser needs it to search for the amp. Android asks the first time you press Connect. If you declined, allow it in Android's settings under Apps → your browser → Permissions.
+
+**Brave** has Web Bluetooth switched off by default, so the Connect button does nothing. Open `brave://flags`, search for "Web Bluetooth" (`#brave-web-bluetooth-api`), set it to Enabled and restart Brave.
+
+**Remembering the amp.** By default the browser forgets the amp when it closes, so you pick it from the list again each time. In Chrome you can turn on `chrome://flags/#enable-web-bluetooth-new-permissions-backend`; the app then reconnects by itself when you open it. It can take a few seconds after a browser restart, while the browser waits to see the amp again.
+
+Changing flags and permissions in the browser you use every day isn't for everyone. If you'd rather keep that browser as it is, a second browser used only for this app works well, and it can sit on the home screen like any other app once installed.
+
 ## Things that may look odd
 
 Most of these are how the amp's firmware behaves. The app works around them where it can.
 
-**The amp starts on Bluetooth after every power-on**, even with an AUX cable plugged in. It doesn't remember AUX. The usual fix is to unplug and replug the cable, or press AUX in the app. The app can't change this permanently: AUX priority only works while the app is open and connected.
-
-**The equalizer only affects Bluetooth audio.** On AUX it changes nothing you can hear.
-
-**After power-on, the EQ is locked to Normal** until the amp has played something over Bluetooth once. Until then the amp quietly ignores EQ changes, and the app says so and offers "Try again". The EQ also resets to Normal on every power-on.
 
 **Switching to AUX leaves your phone connected.** The phone still shows the amp as its speaker and may look like it's playing, but nothing comes out. Turn on "Disconnect the phone when switching to AUX" if you'd rather have the phone let go. Afterwards the phone doesn't reconnect by itself; tap the amp in the phone's Bluetooth settings when you want it back.
 
@@ -47,9 +54,15 @@ Most of these are how the amp's firmware behaves. The app works around them wher
 
 **Renaming the amp restarts it.** Afterwards, remove the old name from your phone's or computer's Bluetooth list and pair the new one. The same happens when the pairing code is changed.
 
-**Changing the beep plays a test beep** and briefly interrupts the music.
+**Changing the beep plays a test sound** and briefly interrupts the music.
 
 **The app can't tell which device is connected for audio**, only whether one is. The amp doesn't report it.
+
+**The amp starts on Bluetooth after every power-on**, even with an AUX cable plugged in. It doesn't remember AUX. The usual fix is to unplug and replug the cable, or press AUX in the app. The app can't change this permanently: AUX priority only works while the app is open and connected.
+
+**The equalizer only affects Bluetooth audio.** On AUX it changes nothing you can hear.
+
+**After power-on, the EQ is locked to Normal** until the amp has played something over Bluetooth once. Until then the amp quietly ignores EQ changes, and the app says so and offers "Try again". The EQ also resets to Normal on every power-on.
 
 **Not available on the ZK-502MT:** lights, bass and treble (the knobs on the board are analog), the DSP screen, USB and SD playback, and firmware updates.
 
@@ -57,7 +70,7 @@ Most of these are how the amp's firmware behaves. The app works around them wher
 
 The official app covers several Wuzhi boards. This app was built and tested on a ZK-502MT. Other models with the same Bluetooth module will probably connect and partly work.
 
-If you have another model, the [protocol logger](docs/logger.md) (linked at the bottom of the app's settings) shows what your amp reports. Please open an issue with a log; it's how support for more models gets added.
+If you have another model, the [protocol logger](docs/logger.md) (linked at the bottom of the app's settings) shows what your amp reports. Please open an issue with a log; it's how support for more models gets added if somebody feels like doing a PR.
 
 ## Privacy
 

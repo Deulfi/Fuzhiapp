@@ -65,6 +65,31 @@ export async function knownDevice(): Promise<BluetoothDevice | null> {
   }
 }
 
+/**
+ * Resolve true when the device's advertisement is received, false after `timeoutMs` or when the
+ * browser has no watchAdvertisements() (then the caller just tries to connect anyway).
+ */
+export async function waitForAdvertisement(device: BluetoothDevice, timeoutMs: number): Promise<boolean> {
+  const d = device as BluetoothDevice & { watchAdvertisements?: (o?: { signal?: AbortSignal }) => Promise<void> };
+  if (!d.watchAdvertisements) return false;
+  const ac = new AbortController();
+  let onAdv: (() => void) | undefined;
+  try {
+    const seen = new Promise<boolean>((resolve) => {
+      onAdv = () => resolve(true);
+      device.addEventListener('advertisementreceived', onAdv);
+      setTimeout(() => resolve(false), timeoutMs);
+    });
+    await d.watchAdvertisements({ signal: ac.signal });
+    return await seen;
+  } catch {
+    return false;
+  } finally {
+    if (onAdv) device.removeEventListener('advertisementreceived', onAdv);
+    ac.abort();
+  }
+}
+
 const props = (c:BluetoothRemoteGATTCharacteristic) =>
   Object.entries({
     read: c.properties.read,
@@ -98,10 +123,10 @@ export class BleTransport implements Link {
   async connect(): Promise<void> {
     const gatt = this.device.gatt;
     if (!gatt) throw new Error('device has no GATT server');
-    this.device.addEventListener('gattserverdisconnected', this.handleDisconnect);
     this.ev.onInfo(`connecting GATT to "${this.device.name ?? '(no name)'}" id=${this.device.id}`);
-    const server = await gatt.connect();
-    const service = await server.getPrimaryService(SERVICE_UUID);
+    const service = await this.connectGatt(gatt);
+    // Only now: a failed attempt above must not look like a dropped connection to the owner.
+    this.device.addEventListener('gattserverdisconnected', this.handleDisconnect);
     this.writeChar = await service.getCharacteristic(WRITE_UUID);
     this.notifyChar = await service.getCharacteristic(NOTIFY_UUID);
     this.ev.onInfo(`AE01 properties: ${props(this.writeChar)}`);
@@ -112,6 +137,36 @@ export class BleTransport implements Link {
     this.notifyChar.addEventListener('characteristicvaluechanged', this.handleNotify);
     await this.notifyChar.startNotifications();
     this.ev.onInfo('notifications on AE02 enabled');
+  }
+
+  /**
+   * gatt.connect() + service lookup, with retries for two Chrome quirks seen on the ZK-502MT:
+   * - After a browser restart, a remembered device fails with "no longer in range" until Chrome
+   *   has seen it advertise again. Fix: watchAdvertisements(), wait for one, then connect.
+   * - Reconnecting right after a disconnect can fail with "GATT Server is disconnected" while
+   *   the old link is still being torn down. Fix: wait a moment and try again.
+   */
+  private async connectGatt(gatt: BluetoothRemoteGATTServer): Promise<BluetoothRemoteGATTService> {
+    let last: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const server = await gatt.connect();
+        return await server.getPrimaryService(SERVICE_UUID);
+      } catch (e) {
+        last = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        this.ev.onInfo(`connect attempt ${attempt} failed: ${msg}`);
+        if (attempt === 3) break;
+        if (/range/i.test(msg)) {
+          this.ev.onInfo('waiting for the amp to advertise (up to 10 s)');
+          const seen = await waitForAdvertisement(this.device, 10_000);
+          this.ev.onInfo(seen ? 'amp seen, connecting again' : 'no advertisement seen; trying anyway');
+        } else {
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+    }
+    throw last;
   }
 
   disconnect(): void {
