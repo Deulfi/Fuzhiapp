@@ -32,8 +32,15 @@ static const uint32_t PAIR_TIMEOUT_MS = 15000;
 static const uint32_t BACKOFF_MIN_MS = 30000;
 static const uint32_t BACKOFF_MAX_MS = 600000;
 static const uint32_t GAIN_STEP_MS = 120;  // one step of 1 every 120 ms, like the PWA
+// Bluetooth audio (TargetInfo type 2 status) has no push; re-read it this often while the
+// sensor is configured. Read-only.
+static const uint32_t TARGET_POLL_MS = 30000;
+static const char *const SOURCE_OPTIONS[] = {"Bluetooth", "AUX", "Idle"};
 
-void WuzhiAmp::setup() { this->publish_gain_(); }  // unknown until the amp reports it
+void WuzhiAmp::setup() {
+  this->publish_gain_();  // unknown until the amp reports it
+  this->publish_connected_(false);
+}
 
 void WuzhiAmp::dump_config() {
   ESP_LOGCONFIG(TAG, "Wuzhi amp bridge:");
@@ -64,6 +71,13 @@ void WuzhiAmp::reset_link_() {
   this->gain_in_flight_ = false;
   this->gain_next_at_ = 0;
   this->publish_gain_();
+  this->source_ = proto::Source::UNKNOWN;
+  this->aux_cable_ = -1;
+  this->bt_audio_ = -1;
+  this->source_in_flight_ = false;
+  this->target_info_logged_ = false;
+  this->next_target_poll_at_ = 0;
+  this->publish_connected_(false);
 }
 
 void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
@@ -204,7 +218,14 @@ void WuzhiAmp::loop() {
     this->start_auth_();
   }
 
-  if (this->link_ == Link::READY) this->step_gain_();
+  if (this->link_ == Link::READY) {
+    this->step_gain_();
+    if (this->needs_target_poll_() && this->next_target_poll_at_ != 0 &&
+        static_cast<int32_t>(now - this->next_target_poll_at_) >= 0) {
+      this->next_target_poll_at_ = now + TARGET_POLL_MS;
+      this->query_target_info_now_();
+    }
+  }
 
   if (this->link_ == Link::AUTHENTICATING && this->auth_step_deadline_ != 0 &&
       static_cast<int32_t>(now - this->auth_step_deadline_) >= 0) {
@@ -287,10 +308,32 @@ void WuzhiAmp::on_authenticated_() {
   this->backoff_ms_ = 0;
   this->link_ = Link::READY;
   this->reassembler_.reset();
-  if (this->query_target_info_) this->query_target_info_now_();
+  this->publish_connected_(true);
+  // Both reads are read-only. GetSysInfo only when an entity needs the amp's state.
+  if (this->query_target_info_ || this->needs_target_poll_()) this->query_target_info_now_();
+  if (this->needs_sys_info_()) this->query_sys_info_now_();
+  if (this->needs_target_poll_()) this->next_target_poll_at_ = millis() + TARGET_POLL_MS;
+}
+
+bool WuzhiAmp::needs_sys_info_() const {
+  bool need = false;
 #ifdef USE_NUMBER
-  // Read-only; only when an entity needs the amp's state.
-  if (this->gain_number_ != nullptr) this->query_sys_info_now_();
+  need |= this->gain_number_ != nullptr;
+#endif
+#ifdef USE_SELECT
+  need |= this->source_select_ != nullptr;
+#endif
+#ifdef USE_BINARY_SENSOR
+  need |= this->aux_cable_sensor_ != nullptr;
+#endif
+  return need;
+}
+
+bool WuzhiAmp::needs_target_poll_() const {
+#ifdef USE_BINARY_SENSOR
+  return this->bt_audio_sensor_ != nullptr;
+#else
+  return false;
 #endif
 }
 
@@ -332,6 +375,12 @@ void WuzhiAmp::on_frame_(const proto::Frame &f) {
   if (f.opcode == proto::op::SYS_INFO_PUSH) {
     proto::SysInfo s;
     if (proto::parse_sys_info(f.payload, s)) this->apply_sys_info_(s, "push");
+  } else if (f.opcode == proto::op::CUSTOM) {
+    uint8_t cmd;
+    proto::Bytes data;
+    if (proto::split_wuzhi(f.payload, cmd, data) && cmd == proto::wuzhi_cmd::SOURCE_PUSH && data.size() == 1) {
+      this->set_source_(proto::source_from_push(data[0]), "push");
+    }
   }
   if (f.expects_response) this->write_(proto::ack_for(f));  // bare ack (D6), as the PWA does
 }
@@ -380,8 +429,15 @@ void WuzhiAmp::query_target_info_now_() {
       ESP_LOGW(TAG, "GetTargetInfo: bad TLV list (%u bytes)", static_cast<unsigned>(reply->payload.size()));
       return;
     }
-    ESP_LOGI(TAG, "Target info: %s", proto::describe_target_info(info).c_str());
-    for (const auto &line : proto::describe_tlvs(info, this->log_private_)) ESP_LOGI(TAG, "  %s", line.c_str());
+    if (!this->target_info_logged_) {
+      // Full dump once per connection; the periodic re-reads only log the summary.
+      this->target_info_logged_ = true;
+      ESP_LOGI(TAG, "Target info: %s", proto::describe_target_info(info).c_str());
+      for (const auto &line : proto::describe_tlvs(info, this->log_private_)) ESP_LOGI(TAG, "  %s", line.c_str());
+    } else {
+      ESP_LOGD(TAG, "Target info: %s", proto::describe_target_info(info).c_str());
+    }
+    this->apply_target_info_(info);
   });
 }
 
@@ -404,10 +460,16 @@ void WuzhiAmp::query_sys_info_now_() {
 
 void WuzhiAmp::apply_sys_info_(const proto::SysInfo &s, const char *source) {
   ESP_LOGI(TAG, "Sys info (%s): %s", source, proto::describe_sys_info(s).c_str());
+  if (!s.is_public) {
+    // e.g. 03 02 00 01 after switching to AUX: only the function is useful
+    this->set_source_(proto::source_from_function(s.function), source);
+  }
+  if (s.has_current_function) this->set_source_(proto::source_from_function(s.current_function), source);
+  if (s.has_aux) this->set_aux_cable_(s.aux_inserted);
   if (s.has_volume) {
     this->gain_current_ = s.volume;
-    // While stepping, the step replies drive the state; a push only confirms it.
-    if (!this->gain_in_flight_) this->publish_gain_();
+    // While stepping, the step replies drive the state and only the end value is published.
+    if (!this->gain_in_flight_ && this->gain_target_ < 0) this->publish_gain_();
   }
 }
 
@@ -464,13 +526,107 @@ void WuzhiAmp::step_gain_() {
       this->publish_gain_();
       return;
     }
-    this->gain_current_ = next;
-    this->publish_gain_();
+    this->gain_current_ = next;  // published once the target is reached, not per step
   });
   if (!sent) {
     this->gain_in_flight_ = false;
     this->gain_target_ = -1;
     this->publish_gain_();
+  }
+}
+
+void WuzhiAmp::apply_target_info_(const proto::TargetInfo &t) {
+  if (t.has_edr) this->set_bt_audio_(t.edr_status == 1);
+  if (t.has_current_function) this->set_source_(proto::source_from_function(t.current_function), "target info");
+}
+
+void WuzhiAmp::set_source_(proto::Source s, const char *why) {
+  if (s == this->source_) return;  // the amp repeats the 0x21 push 2-4 times
+  ESP_LOGI(TAG, "Source: %s (%s)", proto::source_name(s), why);
+  this->source_ = s;
+  this->publish_source_();
+  // A source change often means Bluetooth audio connected or dropped: re-read it.
+  if (this->needs_target_poll_() && this->link_ == Link::READY) this->query_target_info_now_();
+}
+
+void WuzhiAmp::publish_source_() {
+#ifdef USE_SELECT
+  if (this->source_select_ == nullptr) return;
+  switch (this->source_) {
+    case proto::Source::BLUETOOTH: this->source_select_->publish_state(static_cast<size_t>(0)); break;
+    case proto::Source::AUX: this->source_select_->publish_state(static_cast<size_t>(1)); break;
+    case proto::Source::IDLE: this->source_select_->publish_state(static_cast<size_t>(2)); break;
+    default: break;  // unknown / other: keep the last shown value
+  }
+#endif
+}
+
+void WuzhiAmp::set_aux_cable_(bool in) {
+  int v = in ? 1 : 0;
+  if (v == this->aux_cable_) return;
+  ESP_LOGI(TAG, "AUX cable %s", in ? "plugged in" : "unplugged");
+  this->aux_cable_ = v;
+#ifdef USE_BINARY_SENSOR
+  if (this->aux_cable_sensor_ != nullptr) this->aux_cable_sensor_->publish_state(in);
+#endif
+}
+
+void WuzhiAmp::set_bt_audio_(bool on) {
+  int v = on ? 1 : 0;
+  if (v == this->bt_audio_) return;
+  ESP_LOGI(TAG, "Bluetooth audio %s", on ? "connected" : "not connected");
+  this->bt_audio_ = v;
+#ifdef USE_BINARY_SENSOR
+  if (this->bt_audio_sensor_ != nullptr) this->bt_audio_sensor_->publish_state(on);
+#endif
+}
+
+void WuzhiAmp::publish_connected_(bool on) {
+#ifdef USE_BINARY_SENSOR
+  if (this->connected_sensor_ != nullptr) this->connected_sensor_->publish_state(on);
+#endif
+}
+
+void WuzhiAmp::request_source(size_t index) {
+  if (index >= 3) return;
+  if (this->link_ != Link::READY || this->source_in_flight_) {
+    ESP_LOGW(TAG, "Source change ignored: amp not connected or a change is still running");
+    this->publish_source_();
+    return;
+  }
+  if (index == 2) {
+    ESP_LOGW(TAG, "Idle is shown, not selectable");
+    this->publish_source_();
+    return;
+  }
+  const bool to_aux = index == 1;
+  const proto::Source want = to_aux ? proto::Source::AUX : proto::Source::BLUETOOTH;
+  // Switching to Bluetooth while on Bluetooth drops the phone's audio link (S4): skip it.
+  if (want == this->source_) {
+    this->publish_source_();
+    return;
+  }
+  if (to_aux && this->aux_cable_ != 1) {
+    // The amp ignores the switch without a cable (DECISIONS, "From the EQ test").
+    ESP_LOGW(TAG, "No AUX cable plugged in; not switching");
+    this->publish_source_();
+    return;
+  }
+  ESP_LOGI(TAG, "Switching to %s", SOURCE_OPTIONS[index]);
+  this->source_in_flight_ = true;
+  bool sent = this->request_(proto::op::FUNCTION,
+                             proto::function_payload(to_aux ? proto::function_id::AUX : proto::function_id::BLUETOOTH),
+                             [this](const proto::Frame *reply) {
+                               this->source_in_flight_ = false;
+                               if (reply == nullptr || reply->status != 0) {
+                                 ESP_LOGW(TAG, "Source switch not confirmed");
+                               }
+                               // The new source arrives as a push; show the current one meanwhile.
+                               this->publish_source_();
+                             });
+  if (!sent) {
+    this->source_in_flight_ = false;
+    this->publish_source_();
   }
 }
 

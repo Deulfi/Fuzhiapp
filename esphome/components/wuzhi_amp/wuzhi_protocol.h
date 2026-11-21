@@ -201,4 +201,30 @@ struct SysInfo {
 bool parse_sys_info(const Bytes &payload, SysInfo &out);
 std::string describe_sys_info(const SysInfo &s);
 
+// ---------------------------------------------------------------- source ---
+
+enum class Source : uint8_t { UNKNOWN, BLUETOOTH, AUX, IDLE, OTHER };
+const char *source_name(Source s);
+// GetSysInfo attr 6 / TargetInfo type 4 current function / 0x09 function byte: 0 BT, 3 AUX.
+Source source_from_function(uint8_t fn);
+// Wuzhi push AA 02 21 xx 55 [obs]: 01 BT, 03 AUX, 05 idle.
+Source source_from_push(uint8_t v);
+
+namespace function_id {
+constexpr uint8_t BLUETOOTH = 0x00;
+constexpr uint8_t AUX = 0x03;
+constexpr uint8_t PUBLIC = 0xFF;
+}  // namespace function_id
+
+// Function command (opcode 0x0E) payload: FF fn. FF 00 = Bluetooth, FF 03 = AUX (S4, tested).
+Bytes function_payload(uint8_t fn);
+
+namespace wuzhi_cmd {
+constexpr uint8_t SOURCE_PUSH = 0x21;
+}  // namespace wuzhi_cmd
+
+// Split a Wuzhi custom frame AA len cmd data.. 55 (inside opcode 0xFF). Lenient about len,
+// like splitWuzhi(p, false): the model reply's len is one too high.
+bool split_wuzhi(const Bytes &p, uint8_t &cmd, Bytes &data);
+
 }  // namespace wuzhi_proto

@@ -89,3 +89,17 @@ number:
       # Highest value the bridge will ever send (0-40, default 40). The ZK-502MT uses
       # 0-30 and ignores 31-40.
       max_gain: 40
+
+select:
+  - platform: wuzhi_amp
+    source:
+      name: Source
+
+binary_sensor:
+  - platform: wuzhi_amp
+    aux_cable:
+      name: AUX cable
+    bluetooth_audio:
+      name: Bluetooth audio
+    connected:
+      name: Amp connected

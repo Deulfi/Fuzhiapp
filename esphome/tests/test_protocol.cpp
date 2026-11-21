@@ -258,7 +258,24 @@ static void test_sys_info() {
   CHECK(!parse_sys_info(Bytes{}, bad));
 }
 
+static void test_source() {
+  CHECK_EQ_STR(to_hex(encode_command(op::FUNCTION, 4, function_payload(function_id::AUX))),
+               "fe dc ba c0 0e 00 03 04 ff 03 ef");  // docs/PROTOCOL.md §3
+  CHECK_EQ_STR(to_hex(function_payload(function_id::BLUETOOTH)), "ff 00");
+  CHECK(source_from_push(1) == Source::BLUETOOTH);
+  CHECK(source_from_push(3) == Source::AUX);
+  CHECK(source_from_push(5) == Source::IDLE);
+  CHECK(source_from_function(0) == Source::BLUETOOTH);
+  CHECK(source_from_function(3) == Source::AUX);
+  CHECK(source_from_function(1) == Source::OTHER);
+  uint8_t cmd = 0;
+  Bytes data;
+  CHECK(split_wuzhi(from_hex("aa 02 21 03 55"), cmd, data) && cmd == 0x21 && data == Bytes{0x03});
+  CHECK(!split_wuzhi(from_hex("aa 02 21 03"), cmd, data));
+}
+
 int main() {
+  test_source();
   test_gain();
   test_sys_info();
   test_e1_vectors();

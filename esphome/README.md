@@ -2,7 +2,7 @@
 
 An ESP32-C3 Super Mini running ESPHome holds the amp's Bluetooth LE control connection and makes the amp available to Home Assistant over Wi-Fi.
 
-Status: the board connects to a ZK-502MT, runs the 5-step authentication and logs the decoded GetTargetInfo (tested). Gain as a number entity is new and not yet tested on the amp. No source or EQ entities yet.
+Status: the board connects to a ZK-502MT, runs the 5-step authentication and logs the decoded GetTargetInfo (tested). Gain works (tested). Source and the binary sensors are new and not yet tested on the amp. No EQ yet.
 
 The amp accepts only one control connection. While the ESP32 is connected, the phone app (PWA or vendor app) cannot connect, and the other way round. Bluetooth audio from the phone is not affected.
 
@@ -12,7 +12,9 @@ The amp accepts only one control connection. While the ESP32 is connected, the p
 - When the amp pushes a frame that asks for a reply, the bridge sends the same bare acknowledgement the PWA sends.
 - With the gain number configured: one read-only GetSysInfo after auth, to learn the current gain.
 - Gain writes only when you change the gain number (Home Assistant or the web page), never on connect, boot or Home Assistant reconnect. See "Gain" below.
-- Nothing else. No source or EQ writes yet.
+- Source switches only when you change the source select.
+- With the Bluetooth audio sensor configured: a read-only GetTargetInfo every 30 s and after source changes (the amp has no push for it).
+- Nothing else. No EQ writes yet.
 
 ## Gain
 
@@ -26,9 +28,34 @@ number:
 
 - The number is the amp's digital level (public attribute 1), the same as the PWA's gain slider. The ZK-502MT uses 0-30 and ignores 31-40.
 - `max_gain` (0-40, default 40) is the cap. The bridge never sends a value above it; higher requests are lowered to the cap.
-- Changes are stepped by 1 every 120 ms, each step confirmed by the amp, never a jump upward. If the amp reports a value above the cap (set by another app), the first write goes straight down to the cap.
+- Changes are stepped by 1 every 120 ms, each step confirmed by the amp, never a jump upward. Home Assistant only sees the final value. If the amp reports a value above the cap (set by another app), the first write goes straight down to the cap.
 - The number shows as unknown until the amp has reported its gain, and again after a disconnect. Changes made then are ignored.
 - Changes from elsewhere (the amp pushes them) update the number.
+
+## Source and sensors
+
+```yaml
+select:
+  - platform: wuzhi_amp
+    source:
+      name: Source
+
+binary_sensor:
+  - platform: wuzhi_amp
+    aux_cable:
+      name: AUX cable
+    bluetooth_audio:
+      name: Bluetooth audio
+    connected:
+      name: Amp connected
+```
+
+- Source: Bluetooth, AUX or Idle (shown only). Updated live from the amp's source push. Switching uses the standard Function command, like the PWA.
+- Selecting Bluetooth while already on Bluetooth sends nothing, because the switch would drop the phone's audio link.
+- Selecting AUX without a cable sends nothing; the amp would ignore it.
+- AUX cable: from the amp's state (attribute 2), updated by its push.
+- Bluetooth audio: whether a phone or computer is connected for audio.
+- Amp connected: the bridge holds an authenticated control link.
 
 ## Options
 
@@ -55,6 +82,8 @@ Each connection gets exactly one auth attempt. The amp ignores a second challeng
 | `components/wuzhi_amp/wuzhi_protocol.*` | Protocol core in plain C++ (auth, frames, TargetInfo parser), a port of `src/protocol/` |
 | `components/wuzhi_amp/wuzhi_amp.*` | ESPHome glue on top of `ble_client` |
 | `components/wuzhi_amp/number.py` | Gain number entity |
+| `components/wuzhi_amp/select.py` | Source select |
+| `components/wuzhi_amp/binary_sensor.py` | AUX cable, Bluetooth audio, connected |
 | `tests/test_protocol.cpp` | Host tests for the protocol core |
 
 ## Privacy
@@ -250,6 +279,5 @@ They check the E1 vectors from `docs/PROTOCOL.md` section 4, the frame examples 
 
 In this order, each one tested on the amp before the next:
 
-1. Source BT/AUX as a select, with live updates from the 0x21 push.
-2. EQ preset as a select, AUX cable in as a binary sensor.
-3. Optional AUX priority.
+1. EQ preset as a select.
+2. Optional AUX priority.

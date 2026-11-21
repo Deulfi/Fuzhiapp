@@ -579,4 +579,38 @@ std::string describe_sys_info(const SysInfo &s) {
   return out;
 }
 
+// ---------------------------------------------------------------- source ---
+
+const char *source_name(Source s) {
+  switch (s) {
+    case Source::BLUETOOTH: return "Bluetooth";
+    case Source::AUX: return "AUX";
+    case Source::IDLE: return "Idle";
+    case Source::OTHER: return "Other";
+    default: return "unknown";
+  }
+}
+
+Source source_from_function(uint8_t fn) {
+  if (fn == function_id::BLUETOOTH) return Source::BLUETOOTH;
+  if (fn == function_id::AUX) return Source::AUX;
+  return Source::OTHER;
+}
+
+Source source_from_push(uint8_t v) {
+  if (v == 1) return Source::BLUETOOTH;
+  if (v == 3) return Source::AUX;
+  if (v == 5) return Source::IDLE;
+  return Source::OTHER;
+}
+
+Bytes function_payload(uint8_t fn) { return Bytes{function_id::PUBLIC, fn}; }
+
+bool split_wuzhi(const Bytes &p, uint8_t &cmd, Bytes &data) {
+  if (p.size() < 4 || p[0] != 0xAA || p.back() != 0x55) return false;
+  cmd = p[2];
+  data.assign(p.begin() + 3, p.end() - 1);
+  return true;
+}
+
 }  // namespace wuzhi_proto

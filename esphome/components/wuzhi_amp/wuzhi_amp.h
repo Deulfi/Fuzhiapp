@@ -12,6 +12,12 @@
 #ifdef USE_NUMBER
 #include "esphome/components/number/number.h"
 #endif
+#ifdef USE_SELECT
+#include "esphome/components/select/select.h"
+#endif
+#ifdef USE_BINARY_SENSOR
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#endif
 
 #include "wuzhi_protocol.h"
 
@@ -45,6 +51,16 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   void set_gain_number(number::Number *n) { this->gain_number_ = n; }
 #endif
   void set_max_gain(int v) { this->max_gain_ = v; }
+#ifdef USE_SELECT
+  void set_source_select(select::Select *s) { this->source_select_ = s; }
+#endif
+#ifdef USE_BINARY_SENSOR
+  void set_aux_cable_sensor(binary_sensor::BinarySensor *s) { this->aux_cable_sensor_ = s; }
+  void set_bt_audio_sensor(binary_sensor::BinarySensor *s) { this->bt_audio_sensor_ = s; }
+  void set_connected_sensor(binary_sensor::BinarySensor *s) { this->connected_sensor_ = s; }
+#endif
+  // From the source select: 0 Bluetooth, 1 AUX, 2 Idle (display only).
+  void request_source(size_t index);
   // From the gain number (Home Assistant, web page). Steps toward the value, capped.
   void request_gain(float value);
 
@@ -79,6 +95,14 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   void apply_sys_info_(const wuzhi_proto::SysInfo &s, const char *source);
   void step_gain_();
   void publish_gain_();
+  void apply_target_info_(const wuzhi_proto::TargetInfo &t);
+  void set_source_(wuzhi_proto::Source s, const char *why);
+  void publish_source_();
+  void set_aux_cable_(bool in);
+  void set_bt_audio_(bool on);
+  void publish_connected_(bool on);
+  bool needs_sys_info_() const;
+  bool needs_target_poll_() const;
 
   uint16_t write_handle_{0};
   uint16_t notify_handle_{0};
@@ -111,7 +135,30 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   int gain_target_{-1};
   bool gain_in_flight_{false};
   uint32_t gain_next_at_{0};
+
+  // source, AUX cable, Bluetooth audio
+#ifdef USE_SELECT
+  select::Select *source_select_{nullptr};
+#endif
+#ifdef USE_BINARY_SENSOR
+  binary_sensor::BinarySensor *aux_cable_sensor_{nullptr};
+  binary_sensor::BinarySensor *bt_audio_sensor_{nullptr};
+  binary_sensor::BinarySensor *connected_sensor_{nullptr};
+#endif
+  wuzhi_proto::Source source_{wuzhi_proto::Source::UNKNOWN};
+  int aux_cable_{-1};  // -1 unknown
+  int bt_audio_{-1};
+  bool source_in_flight_{false};
+  bool target_info_logged_{false};
+  uint32_t next_target_poll_at_{0};
 };
+
+#ifdef USE_SELECT
+class SourceSelect : public select::Select, public Parented<WuzhiAmp> {
+ protected:
+  void control(size_t index) override { this->parent_->request_source(index); }
+};
+#endif
 
 #ifdef USE_NUMBER
 class GainNumber : public number::Number, public Parented<WuzhiAmp> {
