@@ -165,6 +165,8 @@ Both contain gain, source, EQ, AUX cable, Bluetooth audio, amp connected, AUX pr
 4. Close the PWA and vendor app so the amp advertises. The board finds it within a few seconds.
 5. Home Assistant discovers the board (Settings, Devices and services). Adopting it sets the encryption key; no key needs to be typed.
 
+Until Home Assistant has adopted the board, its API and over-the-air updates have no key, like any ESPHome device fresh from a firmware file. Adopt it soon after flashing.
+
 Updates: flash the `ota.bin` of a newer release from the board's web page (web variant) or with Install, then Wirelessly, after "Take control" in the ESPHome Device Builder. "Take control" turns the board into a normal Device Builder config that you can edit.
 
 ## Flashing with the ESPHome Device Builder

@@ -44,8 +44,9 @@ api:
   encryption: {}
 
 ota:
+  # No encryption block: with a runtime-provisioned api key ESPHome uses that key for OTA
+  # once Home Assistant has set it, and an explicit block would need a fixed key here.
   - platform: esphome
-    encryption: {}
 
 wifi:
   ap:
