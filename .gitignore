@@ -1,8 +1,6 @@
-node_modules/
-dist/
-# Vendor screenshots: reference only, never commit (clean-room)
-original app images/
-# Logger exports contain device addresses/serials
-rcsp-log-*.txt
-__pycache__/
-.claude/
+# Wi-Fi and API secrets, the amp address
+secrets.yaml
+# ESPHome build output
+.esphome/
+# host test binary
+tests/build/

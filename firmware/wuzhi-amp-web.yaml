@@ -3,7 +3,7 @@
 # Uses more RAM than the lean variant.
 
 packages:
-  base: github://Deulfi/Fuzhiapp/esphome/firmware/wuzhi-amp-lean.yaml@esphome-bridge
+  base: github://Deulfi/Fuzhiapp/firmware/wuzhi-amp-lean.yaml@esphome-bridge
 
 esphome:
   project:
@@ -11,7 +11,7 @@ esphome:
     version: "0.1.0"
 
 dashboard_import:
-  package_import_url: github://Deulfi/Fuzhiapp/esphome/firmware/wuzhi-amp-web.yaml@esphome-bridge
+  package_import_url: github://Deulfi/Fuzhiapp/firmware/wuzhi-amp-web.yaml@esphome-bridge
   import_full_config: false
 
 web_server:

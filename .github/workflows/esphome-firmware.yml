@@ -1,11 +1,10 @@
-# Builds the public ESP32-C3 bridge firmware. Every push that touches esphome/ produces
+# Builds the public ESP32-C3 bridge firmware. Every push to esphome-bridge produces
 # downloadable artifacts; a tag "esphome-v*" also publishes them as a GitHub release.
 name: ESPHome firmware
 
 on:
   push:
-    branches: [main, esphome-bridge]
-    paths: [esphome/**, .github/workflows/esphome-firmware.yml]
+    branches: [esphome-bridge]
     tags: ["esphome-v*"]
   workflow_dispatch:
 
@@ -21,7 +20,7 @@ jobs:
       - id: esphome
         uses: esphome/build-action@v8.1.0
         with:
-          yaml-file: esphome/firmware/wuzhi-amp-${{ matrix.variant }}.yaml
+          yaml-file: firmware/wuzhi-amp-${{ matrix.variant }}.yaml
       - name: Name files by variant
         run: |
           mkdir -p out

@@ -1,6 +1,6 @@
 // Jieli RCSP protocol core for the Wuzhi ZK-502MT (docs/PROTOCOL.md).
 // Plain C++17, no ESPHome or ESP-IDF dependencies, so it can be unit-tested on a PC
-// (esphome/tests/). Port of src/protocol/{auth,frame,codec,info,handshake}.ts.
+// (tests/). Port of the PWA's src/protocol/{auth,frame,codec,info,handshake}.ts on main.
 #pragma once
 
 #include <cstddef>

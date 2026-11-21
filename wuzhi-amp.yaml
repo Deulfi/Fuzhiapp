@@ -1,5 +1,5 @@
 # ESPHome config for an ESP32-C3 Super Mini as a BLE bridge to a Wuzhi ZK-502MT amp.
-# See esphome/README.md for the flashing guide.
+# See README.md for the flashing guide.
 #
 # Put these in secrets.yaml next to this file (never commit it):
 #   wifi_ssid: "..."
@@ -20,8 +20,8 @@ external_components:
   #   - source:
   #       type: git
   #       url: https://github.com/Deulfi/Fuzhiapp
-  #       ref: main
-  #       path: esphome/components
+  #       ref: esphome-bridge
+  #       path: components
   #     components: [wuzhi_amp]
   - source:
       type: local

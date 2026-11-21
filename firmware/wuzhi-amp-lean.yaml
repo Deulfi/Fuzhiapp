@@ -1,7 +1,7 @@
 # Public firmware for an ESP32-C3 Super Mini as a BLE bridge to a Wuzhi ZK-502MT amp.
 # No secrets: Wi-Fi is set up while flashing (web.esphome.io) or through the
 # "Wuzhi Amp Bridge Setup" hotspot, and Home Assistant sets the encryption key when it adopts
-# the device. The amp is found automatically. See esphome/README.md.
+# the device. The amp is found automatically. See README.md.
 #
 # Lean variant: Home Assistant only, no web page. wuzhi-amp-web.yaml adds the web page.
 
@@ -28,12 +28,12 @@ external_components:
       type: git
       url: https://github.com/Deulfi/Fuzhiapp
       ref: esphome-bridge
-      path: esphome/components
+      path: components
     components: [wuzhi_amp]
 
 # Lets "Take control" in the ESPHome Device Builder turn this into an editable config.
 dashboard_import:
-  package_import_url: github://Deulfi/Fuzhiapp/esphome/firmware/wuzhi-amp-lean.yaml@esphome-bridge
+  package_import_url: github://Deulfi/Fuzhiapp/firmware/wuzhi-amp-lean.yaml@esphome-bridge
   import_full_config: false
 
 logger:
