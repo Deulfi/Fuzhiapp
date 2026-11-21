@@ -72,6 +72,8 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
       }
       this->write_handle_ = wr->handle;
       this->notify_handle_ = nt->handle;
+      ESP_LOGD(TAG, "AE01 handle 0x%04x properties 0x%02x, AE02 handle 0x%04x properties 0x%02x", wr->handle,
+               wr->properties, nt->handle, nt->properties);
       // ble_client marks every node ESTABLISHED at SEARCH_CMPL and then frees its GATT cache once
       // all nodes are established and no counted notify registration is pending. The CCCD lookup
       // needs that cache, so: stay CONNECTED until notifications are on, and register through
@@ -110,10 +112,11 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
       break;
 
     case ESP_GATTC_NOTIFY_EVT:
-      if (param->notify.handle != this->notify_handle_) break;
-      if (this->link_ == Link::AUTHENTICATING) {
-        ESP_LOGD(TAG, "auth rx %u bytes", static_cast<unsigned>(param->notify.value_len));
+      if (this->link_ == Link::AUTHENTICATING || param->notify.handle != this->notify_handle_) {
+        ESP_LOGD(TAG, "rx %s on handle 0x%04x, %u bytes", param->notify.is_notify ? "notification" : "indication",
+                 param->notify.handle, static_cast<unsigned>(param->notify.value_len));
       }
+      if (param->notify.handle != this->notify_handle_) break;
       this->on_notify_(param->notify.value, param->notify.value_len);
       break;
 
@@ -237,6 +240,8 @@ void WuzhiAmp::on_frame_(const proto::Frame &f) {
 
 bool WuzhiAmp::write_(const proto::Bytes &bytes) {
   if (this->write_handle_ == 0) return false;
+  // Outgoing bytes carry no address or ID string (auth challenges are random).
+  ESP_LOGD(TAG, "tx %u bytes: %s", static_cast<unsigned>(bytes.size()), proto::to_hex(bytes).c_str());
   for (size_t off = 0; off < bytes.size(); off += CHUNK) {
     size_t n = std::min(CHUNK, bytes.size() - off);
     uint8_t buf[CHUNK];
