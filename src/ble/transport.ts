@@ -69,6 +69,22 @@ export async function knownDevice(): Promise<BluetoothDevice | null> {
  * Resolve true when the device's advertisement is received, false after `timeoutMs` or when the
  * browser has no watchAdvertisements() (then the caller just tries to connect anyway).
  */
+export const BLUETOOTH_OFF = 'Bluetooth seems to be off. Turn it on and try again.';
+
+/**
+ * 'off' when the browser says no Bluetooth adapter is available (radio switched off on most
+ * platforms), 'unknown' when it can't tell. Never blocks a connect on 'unknown'.
+ */
+export async function bluetoothState(): Promise<'on' | 'off' | 'unknown'> {
+  try {
+    const bt = navigator.bluetooth as Bluetooth & { getAvailability?: () => Promise<boolean> };
+    if (!bt?.getAvailability) return 'unknown';
+    return (await bt.getAvailability()) ? 'on' : 'off';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export async function waitForAdvertisement(device: BluetoothDevice, timeoutMs: number): Promise<boolean> {
   const d = device as BluetoothDevice & { watchAdvertisements?: (o?: { signal?: AbortSignal }) => Promise<void> };
   if (!d.watchAdvertisements) return false;
@@ -160,7 +176,9 @@ export class BleTransport implements Link {
         if (/range/i.test(msg)) {
           this.ev.onInfo('waiting for the amp to advertise (up to 10 s)');
           const seen = await waitForAdvertisement(this.device, 10_000);
-          this.ev.onInfo(seen ? 'amp seen, connecting again' : 'no advertisement seen; trying anyway');
+          this.ev.onInfo(seen ? 'amp seen, connecting again' : 'no advertisement seen; trying again shortly');
+          // Browsers without watchAdvertisements() return at once: give the stack time instead.
+          if (!seen) await new Promise((r) => setTimeout(r, 1500 * attempt));
         } else {
           await new Promise((r) => setTimeout(r, 800));
         }

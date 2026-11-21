@@ -25,11 +25,19 @@ The app also shows changes made elsewhere, such as plugging in the AUX cable or 
 
 You can install it like an app from the browser menu ("Install app" or "Add to Home screen").
 
-Connecting the app is separate from pairing your phone for music. The app uses its own Bluetooth connection, so your phone can play music to the amp while the app is connected, and the app can run on a different device than the one playing.
+Connecting the app is separate from pairing your phone for music. The app uses its own Bluetooth connection, so your phone can play music to the amp while the app is connected, and the app can run on a different device than the one playing.(one connection is for sound and the other is like a remote)
 
 ## Browser setup
 
 Chrome and Edge work without changes. A few things help or are needed in some cases:
+
+| To get this | Do this |
+|---|---|
+| The amp shows up when you press Connect (Android) | Allow the browser the "Nearby devices" permission |
+| The Connect button opens the device list (Brave) | Enable `brave://flags/#brave-web-bluetooth-api` |
+| The app reconnects by itself when opened | Enable `chrome://flags/#enable-web-bluetooth-new-permissions-backend` |
+
+The details:
 
 **Nearby devices permission (Android).** The browser needs it to search for the amp. Android asks the first time you press Connect. If you declined, allow it in Android's settings under Apps → your browser → Permissions.
 
@@ -69,6 +77,8 @@ Most of these are how the amp's firmware behaves. The app works around them wher
 ## Other models
 
 The official app covers several Wuzhi boards. This app was built and tested on a ZK-502MT. Other models with the same Bluetooth module will probably connect and partly work.
+
+**If the app can't find or connect to your board, check the Bluetooth chip.** The tested board has a Jieli chip marked `JL AS24BP0Q237-25A4`, most likely an AC6925A; the part after the dash (`-25A4`) is what matters. Older versions of the ZK-502MT are said to use a different chip (forum posts mention a TD5182A). Boards without a Jieli chip won't work with this app.
 
 If you have another model, the [protocol logger](docs/logger.md) (linked at the bottom of the app's settings) shows what your amp reports. Please open an issue with a log; it's how support for more models gets added if somebody feels like doing a PR.
 

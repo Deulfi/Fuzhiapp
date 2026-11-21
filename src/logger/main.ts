@@ -17,6 +17,8 @@ import {
   parseTargetInfo,
 } from '../protocol/info';
 import { checkOutgoing, type Verdict } from '../protocol/safety';
+import { mountIdentityPanel } from '../identity/panel';
+import { parseTlvs as parseIdTlvs, scrub, type Tlv as IdTlv } from '../identity/identity';
 import { applyPush, applySysInfo, applyTargetInfo, wantsAux, type AmpState } from '../app/state';
 import { clampTiming, DEFAULT_TIMING, loadTiming, saveTiming, TIMING_LIMITS, type Timing } from '../app/timing';
 
@@ -203,6 +205,7 @@ async function connect(known?: BluetoothDevice) {
             `device command op ${hx(f.opcode)} sn ${hx(f.sn)}${f.expectsResponse ? ', wants reply' : ''}`,
             describePayload(f) + (f.expectsResponse ? (client?.autoAck ? '; acking' : '; NOT acked (option off)') : ''),
           );
+          for (const l of pushListeners) l(f.opcode, f.payload);
           const before = ampState;
           ampState = applyPush(ampState, f).state;
           const cableIn = !before.auxInserted && ampState.auxInserted;
@@ -270,6 +273,81 @@ async function request(opcode: number, payload: Uint8Array): Promise<Frame | nul
   }
 }
 
+/** TLVs from every GetTargetInfo reply seen, to know which bytes identify this amp. */
+let privateTlvs: IdTlv[] = [];
+
+/**
+ * The log as text for copy/download. Unless the box is ticked, the Bluetooth address, the
+ * serial-like ID string and pairing-code digits are replaced with xx.
+ */
+function exportText(): string {
+  const text = lines.join('\n');
+  if ($<HTMLInputElement>('export-private').checked) return text;
+  const pin = /(aa 06 (?:03|13) 0[01])((?: [0-9a-f]{2}){4})/g;
+  return `${scrub(text, privateTlvs).replace(pin, '$1 xx xx xx xx')}\n(Bluetooth address, ID string and pairing code redacted.)`;
+}
+
+// ---------- SDK probes (docs/SDK_EXTRAS.md §2), all read-only ----------
+interface Probe {
+  name: string;
+  opcode: number;
+  payload: number[];
+}
+const PROBES: Probe[] = [
+  { name: 'Feature map (02)', opcode: 0x02, payload: [] },
+  { name: 'Device MD5 (D4)', opcode: 0xd4, payload: [] },
+  { name: 'Low-latency settings (D5)', opcode: 0xd5, payload: [] },
+  { name: 'Headset-style settings (C1)', opcode: 0xc1, payload: [0xff, 0xff, 0xff, 0xff] },
+  ...[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x16].map((fn) => ({
+    name: `Attributes of function ${fn.toString(16).padStart(2, '0')} (07)`,
+    opcode: Op.GetSysInfo,
+    payload: [fn, 0xff, 0xff, 0xff, 0xff],
+  })),
+  { name: 'Device online status (07, attr 2)', opcode: Op.GetSysInfo, payload: [0xff, 0x00, 0x00, 0x00, 0x04] },
+  { name: 'EQ preset table (07, attr 0C)', opcode: Op.GetSysInfo, payload: [0xff, 0x00, 0x00, 0x10, 0x00] },
+  { name: 'Phone status (07, attr 0F)', opcode: Op.GetSysInfo, payload: [0xff, 0x00, 0x00, 0x80, 0x00] },
+  { name: '7-band L/R EQ read (FF 00 01 00 00)', opcode: Op.Custom, payload: [0x00, 0x01, 0x00, 0x00] },
+  { name: 'Reverb / limiter state (07, attr 10)', opcode: Op.GetSysInfo, payload: [0xff, 0x00, 0x01, 0x00, 0x00] },
+];
+
+/** Send one probe; returns a one-line result for the summary. Errors are caught, never thrown. */
+async function runProbe(p: Probe): Promise<string> {
+  log('NOTE', `probe: ${p.name}`);
+  if (!client) return `${p.name}: not connected`;
+  try {
+    const f = await client.request(p.opcode, Uint8Array.from(p.payload));
+    return `${p.name}: status ${hx(f.status!)}, ${f.payload.length ? `${f.payload.length} B: ${toHex(f.payload)}` : 'empty reply'}`;
+  } catch (e) {
+    return `${p.name}: ${errText(e)}`;
+  }
+}
+
+function renderProbes() {
+  const box = $('probe-buttons');
+  const all = document.createElement('button');
+  all.textContent = 'Run all';
+  all.className = 'needs-conn primary';
+  all.disabled = true;
+  all.addEventListener('click', async () => {
+    all.disabled = true;
+    const results: string[] = [];
+    for (const p of PROBES) results.push(await runProbe(p));
+    log('NOTE', 'probe summary', results.join(' | '));
+    all.disabled = !client;
+  });
+  box.append(all);
+  for (const p of PROBES) {
+    const b = document.createElement('button');
+    b.textContent = p.name;
+    b.className = 'needs-conn';
+    b.disabled = true;
+    b.addEventListener('click', async () => log('NOTE', 'probe result', await runProbe(p)));
+    box.append(b);
+  }
+}
+
+const pushListeners = new Set<(opcode: number, payload: Uint8Array) => void>();
+
 // ---------- AUX priority test (same rule as the app: src/app/state.ts wantsAux) ----------
 let ampState: AmpState = {};
 let priorityLast = 0;
@@ -323,7 +401,10 @@ function renderTiming() {
 
 function onReply(f: Frame) {
   try {
-    if (f.opcode === Op.GetTargetInfo && f.status === 0) ampState = applyTargetInfo(ampState, f.payload);
+    if (f.opcode === Op.GetTargetInfo && f.status === 0) {
+      ampState = applyTargetInfo(ampState, f.payload);
+      privateTlvs = [...privateTlvs, ...parseIdTlvs(f.payload).tlvs.filter((t) => t.type === 2 || t.type === 3)];
+    }
     if (f.opcode === Op.GetSysInfo && f.status === 0) ampState = applySysInfo(ampState, f.payload);
   } catch {
     /* shown in the DEC line */
@@ -533,6 +614,14 @@ function init() {
   $('btn-sel-aux').addEventListener('click', () => void writeTest('AUX via vendor source command (AA 02 08 03 55)', Op.Custom, sourceSelect(3)));
   $('btn-sel-bt').addEventListener('click', () => void writeTest('Bluetooth via vendor source command (AA 02 08 01 55)', Op.Custom, sourceSelect(1)));
   renderTiming();
+  renderProbes();
+  mountIdentityPanel($('identity'), {
+    request: async (opcode, payload) => (await request(opcode, payload))?.raw ?? null,
+    onPush: (cb) => {
+      pushListeners.add(cb);
+      return () => pushListeners.delete(cb);
+    },
+  });
   $('btn-timing-save').addEventListener('click', () => {
     const raw: Partial<Record<keyof Timing, unknown>> = {};
     for (const k of Object.keys(DEFAULT_TIMING) as (keyof Timing)[]) raw[k] = $<HTMLInputElement>(`timing-${k}`).value;
@@ -631,7 +720,7 @@ function init() {
   $('note').addEventListener('keydown', (e) => e.key === 'Enter' && addNote());
   $('btn-copy').addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(lines.join('\n'));
+      await navigator.clipboard.writeText(exportText());
       log('INFO', `copied ${lines.length} lines`);
     } catch (e) {
       log('ERR', `copy failed: ${errText(e)}`);
@@ -639,7 +728,7 @@ function init() {
   });
   $('btn-download').addEventListener('click', () => {
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], { type: 'text/plain' }));
+    a.href = URL.createObjectURL(new Blob([exportText() + '\n'], { type: 'text/plain' }));
     a.download = `rcsp-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
     a.click();
     URL.revokeObjectURL(a.href);

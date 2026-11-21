@@ -68,6 +68,17 @@
       </section>
 
       <section>
+        <h2>Device identity</h2>
+        <div id="identity"></div>
+      </section>
+
+      <section>
+        <h2>SDK probes (read-only)</h2>
+        <p class="muted">Commands from docs/SDK_EXTRAS.md §2 that the vendor app never sends. None changes a setting. An amp that doesn't implement one answers with an error status, an empty reply or nothing. "Run all" sends them one after another and writes a summary to the log.</p>
+        <div class="row" id="probe-buttons"></div>
+      </section>
+
+      <section>
         <h2>Write tests</h2>
         <p class="muted">Each button sends one command, then re-reads GetSysInfo.</p>
         <div class="row" id="source-buttons"><span class="muted">Source buttons appear after GetTargetInfo.</span></div>
@@ -195,6 +206,7 @@
           <button id="btn-copy">Copy log</button>
           <button id="btn-download">Download .txt</button>
           <button id="btn-clear">Clear</button>
+          <label class="inline"><input id="export-private" type="checkbox" /> Include address, ID string and pairing code</label>
         </div>
         <ol id="log"></ol>
       </section>

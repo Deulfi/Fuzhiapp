@@ -5,6 +5,4 @@ original app images/
 # Logger exports contain device addresses/serials
 rcsp-log-*.txt
 __pycache__/
-# Third-party forum text, kept locally for reference only
-reddit.txt
 .claude/

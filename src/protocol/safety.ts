@@ -66,6 +66,8 @@ function checkFrame(f: RawFrame, cap: number | null): Verdict {
 
 /** Wuzhi `AA len cmd data 55` frames inside opcode 0xFF (docs/PROTOCOL.md §7, §12.2). */
 function checkCustom(payload: Uint8Array, cap: number | null): Verdict {
+  // 7-band L/R EQ read from the vendor test screen (SDK_EXTRAS.md §7); read-only. Its Set form stays unknown.
+  if (payload.length === 4 && payload[0] === 0x00 && payload[1] === 0x01 && payload[2] === 0x00 && payload[3] === 0x00) return ALLOW;
   const w = splitWuzhi(payload);
   if (!w) return { action: 'confirm', reason: 'custom opcode 0xFF with an unknown payload' };
   if (w.data.length === 0 && (WUZHI_READS as readonly number[]).includes(w.cmd)) return ALLOW;

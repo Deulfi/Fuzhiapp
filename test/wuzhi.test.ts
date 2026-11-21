@@ -22,7 +22,7 @@ describe('Wuzhi settings frames (§12.2)', () => {
     expect(describeWuzhi(fromHex('aa 02 02 80 55'))).toBe('beep setting acknowledged (0x80)');
     expect(describeWuzhi(fromHex('aa 02 21 03 55'))).toBe('source changed → AUX');
     expect(describeWuzhi(fromHex('aa 12 01 30 30 32 30 31 30 32 32 30 33 01 08 00 04 01 08 55'))).toBe(
-      "product code 002 (model WZ002), then \"010\", \"2203\", check 180418 (passes the vendor app's ≥ 180418 test [D])",
+      'product code 002, then "010" (firmware revision? [I]), "2203" (build date? [I]), 6 bytes [01 08 00 04 01 08]',
     );
   });
 });

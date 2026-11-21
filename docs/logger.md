@@ -35,6 +35,10 @@ Add notes while testing ("turning the knob now", "phone connected"). They make a
 
 **Read-only queries.** Device info, settings, DSP info. Safe to press at any time.
 
+**Device identity.** Collects the fields the amp reports about itself (every GetTargetInfo TLV with hex, ASCII and meaning, plus the model query) and copies them as one text report. Read-only. See [DEVICE_ID_AND_FIRMWARE.md](DEVICE_ID_AND_FIRMWARE.md). The code in `src/identity/` has no dependencies on the rest of the project.
+
+**SDK probes.** Read-only commands from [SDK_EXTRAS.md](SDK_EXTRAS.md) §2 that the vendor app never sends (feature map, firmware MD5, headset-style settings, every attribute per function, reverb/limiter state). "Run all" sends them in turn and logs a one-line-per-probe summary. Use it to find out what a firmware implements.
+
 **Write tests.** Source switching, gain slider, EQ preset. Each one re-reads the settings afterwards so you can see the result.
 
 **Device settings.** Wuzhi-specific frames (PROTOCOL.md §12):

@@ -1,3 +1,4 @@
+import { BLUETOOTH_OFF } from '../ble/transport';
 import { EQ_NAMES } from '../protocol/info';
 import { Amp, EQ_GAIN_LIMIT } from './amp';
 import { loadProfiles, loadSettings, newId, saveProfiles, saveSettings, type Profile } from './profiles';
@@ -34,9 +35,11 @@ async function act(fn: () => Promise<unknown>) {
   try {
     await fn();
   } catch (e) {
-    if (e instanceof DOMException && e.name === 'NotFoundError') return; // chooser cancelled
-    toast(errText(e), 'error');
-    amp.log(errText(e), 'error');
+    // NotFoundError is both "chooser cancelled" (stay quiet) and "adapter not available" (Bluetooth off).
+    if (e instanceof DOMException && e.name === 'NotFoundError' && /cancel/i.test(e.message)) return;
+    const text = e instanceof DOMException && /adapter|not available/i.test(e.message) ? BLUETOOTH_OFF : errText(e);
+    toast(text, 'error');
+    amp.log(text, 'error');
   }
 }
 
@@ -47,7 +50,7 @@ function render() {
   $('view-connect').hidden = connected;
   $('view-amp').hidden = !connected;
   $('btn-settings').hidden = !connected;
-  $('status').textContent = { disconnected: 'Not connected', connecting: 'Connecting…', connected: 'Connected' }[amp.status];
+  $('status').textContent = amp.restarting && amp.status !== 'connected' ? 'Amp restarting…' : { disconnected: 'Not connected', connecting: 'Connecting…', connected: 'Connected' }[amp.status];
   $('status').dataset.state = amp.status;
   $('dev-name').textContent = connected ? amp.deviceName : '';
   $<HTMLButtonElement>('btn-connect').disabled = amp.status === 'connecting';
@@ -318,7 +321,7 @@ function init() {
       const name = $<HTMLInputElement>('bt-name').value.trim();
       await amp.rename(name);
       dlg.close();
-      toast(`Renamed to "${name}". The amp restarts now; then reconnect, and re-pair it on your phone or computer.`);
+      toast(`Renamed to "${name}". The amp restarts now; the app reconnects by itself.`);
     }),
   );
   $('btn-drop').addEventListener('click', () => act(() => amp.dropPhone()));

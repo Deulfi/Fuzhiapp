@@ -81,24 +81,19 @@ export interface ModelReply {
   productCode: string;
   field2: string;
   field3: string;
-  /** 6 bytes read as digits (obs: 01 08 00 04 01 08 → "180418"); hex if they aren't digits */
-  check: string;
-  /** [D] the vendor app compares the 6 bytes as a number with 180418; ≥ is assumed [I] */
-  checkPasses: boolean;
+  /** the 6 trailing bytes as hex (obs: 01 08 00 04 01 08). The vendor app compares them with
+   * 180418 for one other product only; it doesn't matter for the ZK-502MT [D]. */
+  raw6: string;
 }
 
 /** Model query reply data (after `AA len 01`). Null if too short. */
 export function parseModelReply(d: Uint8Array): ModelReply | null {
   if (d.length < 16) return null;
-  const tail = d.subarray(10, 16);
-  const digits = tail.every((b) => b <= 9);
-  const check = digits ? Array.from(tail, String).join('') : Array.from(tail, (b) => b.toString(16).padStart(2, '0')).join(' ');
   return {
     productCode: ascii(d.subarray(0, 3)),
     field2: ascii(d.subarray(3, 6)),
     field3: ascii(d.subarray(6, 10)),
-    check,
-    checkPasses: digits && Number(check) >= 180418,
+    raw6: Array.from(d.subarray(10, 16), (b) => b.toString(16).padStart(2, '0')).join(' '),
   };
 }
 
@@ -133,7 +128,7 @@ export function describeWuzhi(p: Uint8Array): string | null {
       // §12.2: 3 ASCII model code + 3 ASCII + 4 ASCII + 6 bytes
       if (d.length >= 16) {
         const m = parseModelReply(d)!;
-        return `product code ${m.productCode} (model WZ${m.productCode}), then "${m.field2}", "${m.field3}", check ${m.check} (${m.checkPasses ? 'passes' : 'fails'} the vendor app's ≥ 180418 test [D])`;
+        return `product code ${m.productCode}, then "${m.field2}" (firmware revision? [I]), "${m.field3}" (build date? [I]), 6 bytes [${m.raw6}]`;
       }
       return `model info "${ascii(d.subarray(0, 3))}" + ${d.length - 3} more bytes`;
     case WuzhiCmd.BtName:

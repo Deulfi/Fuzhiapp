@@ -70,6 +70,10 @@ describe('Wuzhi settings commands (§12.2)', () => {
       expect(checkOutgoing(custom(q), null).action).toBe('allow');
     }
   });
+  it('allows only the read form of the 7-band EQ frame', () => {
+    expect(checkOutgoing(custom('00 01 00 00'), null).action).toBe('allow');
+    expect(checkOutgoing(custom('00 02 00 00'), null).action).toBe('confirm');
+  });
   it('caps the beep volume like the main volume', () => {
     expect(checkOutgoing(custom('aa 03 02 01 05 55'), null).action).toBe('block');
     expect(checkOutgoing(custom('aa 03 02 01 0b 55'), 10).action).toBe('block');

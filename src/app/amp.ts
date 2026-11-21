@@ -2,7 +2,7 @@
  * Amp controller: connection, auth, live state and the commands the app uses.
  * Everything here is confirmed on a ZK-502MT (see docs/OPEN_QUESTIONS.md) unless marked.
  */
-import { bluetoothAvailable, BleTransport, knownDevice, pickDevice, rememberDevice } from '../ble/transport';
+import { BLUETOOTH_OFF, bluetoothAvailable, bluetoothState, BleTransport, knownDevice, pickDevice, rememberDevice } from '../ble/transport';
 import { RcspClient } from '../protocol/client';
 import { concat, Op, Payload, tlv } from '../protocol/frame';
 import { runHandshake } from '../protocol/handshake';
@@ -86,6 +86,7 @@ export class Amp {
 
   /** Show the browser's device chooser, then connect. `all` lists every device (when a rename broke the name filter). */
   async choose(all = false): Promise<void> {
+    if ((await bluetoothState()) === 'off') throw new Error(BLUETOOTH_OFF);
     this.device = await pickDevice(all ? 'all' : 'name', NAME_PREFIXES);
     await this.connect();
   }
@@ -106,6 +107,11 @@ export class Amp {
   /** Connect to the last chosen device again (no chooser). */
   async connect(): Promise<void> {
     if (!this.device) throw new Error('no device chosen');
+    if ((await bluetoothState()) === 'off') throw new Error(BLUETOOTH_OFF);
+    // A device object kept from an earlier connection can go stale (seen on Android: "no longer
+    // in range" until the page was reloaded). The browser's own list hands out a fresh one.
+    const fresh = await knownDevice();
+    if (fresh && fresh.id === this.device.id) this.device = fresh;
     this.setStatus('connecting');
     this.deviceName = this.device.name ?? 'Amp';
     const t = new BleTransport(this.device, {
@@ -389,7 +395,9 @@ export class Amp {
   /** The amp restarts by itself after a rename; the link drops (A7). */
   async rename(name: string): Promise<void> {
     await this.need().request(Op.Custom, btNameFrame(name));
-    this.log(`Renamed to "${name}"`);
+    this.log(`Renamed to "${name}"; the amp restarts now`);
+    this.restarting = true; // the link drops in a few seconds; handleDisconnect starts reconnecting
+    this.changed();
   }
 
   // ---------- internals ----------
@@ -445,6 +453,36 @@ export class Amp {
     return this.client;
   }
 
+  /** Set after a rename: the amp restarts by itself, and the app reconnects (A7). */
+  restarting = false;
+  private reconnecting = false;
+
+  private async reconnectAfterRestart(): Promise<void> {
+    this.reconnecting = true;
+    const end = Date.now() + 45_000;
+    await sleep(4000); // give the amp time to boot
+    try {
+      while (Date.now() < end && this.status === 'disconnected') {
+        try {
+          await this.connect();
+          this.restarting = false;
+          this.log('Reconnected after the restart');
+          this.ev.onMessage(
+            'Reconnected. If your phone or computer no longer plays to the amp, remove it from its Bluetooth list and pair it again under the new name.',
+          );
+          return;
+        } catch {
+          await sleep(3000);
+        }
+      }
+      this.restarting = false;
+      this.log('Could not reconnect after the restart. Press Connect.', 'error');
+    } finally {
+      this.reconnecting = false;
+      this.changed();
+    }
+  }
+
   private handleDisconnect(): void {
     if (this.recheckTimer) clearTimeout(this.recheckTimer);
     this.recheckTimer = null;
@@ -454,7 +492,8 @@ export class Amp {
     this.client = null;
     this.transport = null;
     this.gainBusy = false;
-    if (this.status === 'connected') this.log('Disconnected from the amp');
+    if (this.status === 'connected') this.log(this.restarting ? 'Amp is restarting' : 'Disconnected from the amp');
+    if (this.restarting && !this.reconnecting) void this.reconnectAfterRestart();
     this.setStatus('disconnected');
   }
 

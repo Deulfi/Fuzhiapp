@@ -83,6 +83,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 code, #log { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 0.85rem; }
 .preview { margin: 6px 0; word-break: break-all; }
 .muted { color: var(--muted); }
+label.inline { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+.id-table { border-collapse: collapse; width: 100%; margin: 6px 0 12px; font-size: 0.85rem; }
+.id-table th, .id-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; word-break: break-all; }
+.id-table th { white-space: nowrap; }
+.id-table tr.missing td { color: var(--muted); font-style: italic; }
+.id-text { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
+section h3 { font-size: 0.9rem; margin: 14px 0 4px; }
 .app-link { font-size: 0.85rem; font-weight: 400; margin-left: 10px; color: var(--accent); }
 .verdict-allow { color: var(--rx); }
 .verdict-confirm { color: var(--note); }

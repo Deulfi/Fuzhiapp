@@ -119,3 +119,17 @@ Every write passes `checkOutgoing`. Volume writes: blocked with no confirmed cap
 - While "Disconnect" runs (it passes through Bluetooth on purpose), priority waits; afterwards it re-checks.
 - EQ card title "Equalizer (Bluetooth)"; user EQ range ±12 dB.
 - Logger: reads for EQ (`AA 01 1B 55`, dB + 12) and volume (`AA 01 19 55`) from §12.4.
+
+## 2026-11-21 — Analysis-session update (identity, privacy, restart)
+- Logger "Device identity" section (src/identity/, no project dependencies): every GetTargetInfo TLV and the model query, copyable as one report. Read-only.
+- Privacy by default: the copy-report and the logger's Copy/Download replace the Bluetooth address, the serial-like part of the ID string and pairing-code digits with `xx`, unless a box is ticked. Captured logs stay out of git (`rcsp-log-*.txt`).
+- SDK type is shown as "a hint, not a confirmed chip". The chip family is not stated as fact anywhere.
+- No OTA and no links to vendor firmware files (removed from DEVICE_ID_AND_FIRMWARE.md).
+- After a rename, the app shows "Amp restarting…", reconnects by itself for up to 45 s, then reminds the user to re-pair under the new name.
+- Already covered before this update: device volume from attr 1 (with the user's limit), no Music tile, custom frames only in 0xFF, no DSP screen, both source commands tested across power cycles.
+
+## 2026-11-21 — Chip and SDK extras
+- Chip: likely a Jieli AC6925A (from the board marking). Mentioned as "likely" in the docs and in the README as a compatibility check; not shown in the app.
+- DEVICE_ID_AND_FIRMWARE.md and PROTOCOL.md merged with the analysis session's second versions; the vendor firmware links stay out.
+- Logger section "SDK probes": the read-only commands from SDK_EXTRAS.md §2, one button each plus "Run all" with a summary.
+- Not adopted from SDK_EXTRAS §1: switching to AUX automatically on every connect. The user asked that connecting changes nothing unless a profile says so; AUX priority (opt-in) covers the rest.

@@ -7,6 +7,8 @@ For people who want to understand, extend or fork the project. If you just want 
 | [development.md](development.md) | Code layout, building, testing, deploying, safety rules, how to add support for another model |
 | [logger.md](logger.md) | The protocol logger page: what each section does and how to capture a useful log |
 | [PROTOCOL.md](PROTOCOL.md) | The Bluetooth protocol: GATT layout, frame format, authentication, commands, Wuzhi-specific frames |
+| [DEVICE_ID_AND_FIRMWARE.md](DEVICE_ID_AND_FIRMWARE.md) | What identifies the amp (SDK type, target-info fields, model query) and what is known about firmware files |
+| [SDK_EXTRAS.md](SDK_EXTRAS.md) | Jieli SDK commands the vendor app never uses: read-only probes, reverb and limiter, untested writes |
 | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | Every protocol claim we tested on a real ZK-502MT, with the result. Corrections to PROTOCOL.md live here |
 | [DECISIONS.md](DECISIONS.md) | Why the app behaves the way it does, in the order the decisions were made |
 | [reference/](reference/) | Small Python reference implementations of the auth function and the frame builder |

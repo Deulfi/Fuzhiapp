@@ -1,14 +1,14 @@
 # Wuzhi ZK-502MT – Bluetooth protocol spec and feature list
 
 Derived from the official Android app *Wuzhi Audio* v1.0.46 (`com.wuzhigoogle.audio`), by static analysis only.
-Sections 1–11 were written before any hardware test; section 12 adds what testing on a real ZK-502MT showed. Test results and corrections are tracked in [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md). Every claim carries a confidence tag:
+**Nothing here has been tested against a real amp.** Every claim carries a confidence tag:
 
 - **[V]** verified – reproduced by running the vendor's native code and matching its output
 - **[D]** read directly from decompiled code (high confidence, but not run against hardware)
 - **[I]** inferred / not seen in code – treat as a hypothesis and test on the device
 
 This document states interoperability facts (UUIDs, byte layouts, opcodes). It contains no vendor code.
-`reference/jl_auth.py` and `reference/frames_demo.py` are original implementations.
+`jl_auth.py` and `frames_demo.py` next to this file are original implementations.
 
 ---
 
@@ -165,7 +165,7 @@ Payload: `[function]` + one or more TLVs `[len = 1+n][type][data(n)]`.
 | **EQ preset / values** | `0xFF` | 4 | `[mode][g0…g9]` (11 B). Dynamic variant: `[mode|0x80][len][gains…]` |
 | **High/bass** | `0xFF` | 0x0B | 8 B: `BE32(a) BE32(b)`; app strings call these Bass and "Height" (treble); which of a/b is which was not pinned down [I] |
 | **Light** | `0xFF` | 7 | 11 B, see 6.4 |
-| **Fixed-len data** | `0xFF` | 0x10 | `BE32(type) + data`. Types: 0 reverb, 1 dynamic limiter, 2 sound-card effect, 3 atmosphere, 4 mic arg. Data layouts of these were not decoded [I] |
+| **Fixed-len data** | `0xFF` | 0x10 | `BE32(type) + data`. The type is a **bit mask**: reverb = `1`, dynamic limiter = `2` (sound-card effect, atmosphere, mic arg follow as 4, 8, 16 by analogy [I]). Reverb data (5 B): `[on][depth BE16 0…100][strength BE16 0…100]`. Dynamic limiter data (2 B): `BE16` signed value, −60…0 (dB). Both from the vendor's Advanced-EQ screen [D]; whether the amp supports them is untested |
 | Music play mode | `1` | 2 | `[mode]` |
 | FM-TX frequency | `0xFF` | 8 | `BE16(round(MHz × 10))` |
 | Emitter mode | `0xFF` | 9 | `[mode]` |
