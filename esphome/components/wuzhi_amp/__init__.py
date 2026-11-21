@@ -14,6 +14,7 @@ CODEOWNERS = []
 CONF_WUZHI_AMP_ID = "wuzhi_amp_id"
 CONF_LOG_PRIVATE = "log_private"
 CONF_QUERY_TARGET_INFO = "query_target_info"
+CONF_AUTH_DELAY = "auth_delay"
 
 wuzhi_amp_ns = cg.esphome_ns.namespace("wuzhi_amp")
 WuzhiAmp = wuzhi_amp_ns.class_("WuzhiAmp", cg.Component, ble_client.BLEClientNode)
@@ -26,6 +27,10 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_QUERY_TARGET_INFO, default=True): cv.boolean,
             # Log the amp's Bluetooth address, ID string and raw frames unredacted.
             cv.Optional(CONF_LOG_PRIVATE, default=False): cv.boolean,
+            # Wait between enabling notifications and sending the auth challenge.
+            cv.Optional(
+                CONF_AUTH_DELAY, default="1s"
+            ): cv.positive_time_period_milliseconds,
         }
     )
     .extend(ble_client.BLE_CLIENT_SCHEMA)
@@ -39,3 +44,4 @@ async def to_code(config):
     await ble_client.register_ble_node(var, config)
     cg.add(var.set_query_target_info(config[CONF_QUERY_TARGET_INFO]))
     cg.add(var.set_log_private(config[CONF_LOG_PRIVATE]))
+    cg.add(var.set_auth_delay(config[CONF_AUTH_DELAY]))

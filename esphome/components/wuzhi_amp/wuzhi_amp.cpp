@@ -23,7 +23,9 @@ static const uint16_t WRITE_CHAR_UUID = 0xAE01;   // write without response only
 static const uint16_t NOTIFY_CHAR_UUID = 0xAE02;
 static const size_t CHUNK = 20;                   // the PWA also writes 20-byte chunks
 static const uint32_t AUTH_STEP_TIMEOUT_MS = 2000;  // spec §4: 2 s per step
-static const uint8_t AUTH_MAX_ATTEMPTS = 3;         // spec §4: up to 3 attempts
+// The spec allows 3 attempts, but the amp ignores a second challenge on the same link
+// (OPEN_QUESTIONS T7). So: one attempt per connection, then reconnect.
+static const uint8_t AUTH_MAX_ATTEMPTS = 1;
 static const uint32_t CCCD_FALLBACK_MS = 1000;
 
 void WuzhiAmp::setup() {}
@@ -32,6 +34,7 @@ void WuzhiAmp::dump_config() {
   ESP_LOGCONFIG(TAG, "Wuzhi amp bridge:");
   ESP_LOGCONFIG(TAG, "  Query target info on connect: %s", YESNO(this->query_target_info_));
   ESP_LOGCONFIG(TAG, "  Log private identifiers: %s", YESNO(this->log_private_));
+  ESP_LOGCONFIG(TAG, "  Auth delay: %u ms", this->auth_delay_ms_);
 }
 
 void WuzhiAmp::reset_link_() {
@@ -42,6 +45,7 @@ void WuzhiAmp::reset_link_() {
   this->auth_attempt_ = 0;
   this->auth_step_deadline_ = 0;
   this->cccd_fallback_at_ = 0;
+  this->auth_start_at_ = 0;
   this->reassembler_.reset();
   this->sn_ = 0;
   this->pending_.clear();
@@ -108,7 +112,7 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
       }
       this->cccd_fallback_at_ = 0;
       this->node_state = espbt::ClientState::ESTABLISHED;
-      this->start_auth_();
+      this->schedule_auth_();
       break;
 
     case ESP_GATTC_NOTIFY_EVT:
@@ -133,6 +137,12 @@ void WuzhiAmp::loop() {
     ESP_LOGW(TAG, "No confirmation for enabling notifications, starting auth anyway");
     this->node_state = espbt::ClientState::ESTABLISHED;
     this->cccd_fallback_at_ = 0;
+    this->schedule_auth_();
+  }
+
+  if (this->link_ == Link::DISCOVERED && this->auth_start_at_ != 0 &&
+      static_cast<int32_t>(now - this->auth_start_at_) >= 0) {
+    this->auth_start_at_ = 0;
     this->start_auth_();
   }
 
@@ -158,9 +168,15 @@ void WuzhiAmp::loop() {
   }
 }
 
+void WuzhiAmp::schedule_auth_() {
+  ESP_LOGD(TAG, "Starting auth in %u ms", this->auth_delay_ms_);
+  this->auth_start_at_ = millis() + this->auth_delay_ms_;
+  if (this->auth_start_at_ == 0) this->auth_start_at_ = 1;
+}
+
 void WuzhiAmp::start_auth_() {
   if (this->auth_attempt_ >= AUTH_MAX_ATTEMPTS) {
-    ESP_LOGE(TAG, "auth failed after %u attempts, disconnecting (ble_client will retry)", this->auth_attempt_);
+    ESP_LOGE(TAG, "auth failed, disconnecting (ble_client will reconnect)");
     this->auth_step_deadline_ = 0;
     this->link_ = Link::DISCOVERED;
     this->parent()->disconnect();

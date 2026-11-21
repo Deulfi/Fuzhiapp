@@ -30,6 +30,7 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
 
   void set_log_private(bool v) { this->log_private_ = v; }
   void set_query_target_info(bool v) { this->query_target_info_ = v; }
+  void set_auth_delay(uint32_t ms) { this->auth_delay_ms_ = ms; }
 
   bool is_ready() const { return this->link_ == Link::READY; }
 
@@ -45,6 +46,7 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   };
 
   void reset_link_();
+  void schedule_auth_();
   void start_auth_();
   void handle_auth_step_(const wuzhi_proto::AuthSession::Step &step);
   void on_authenticated_();
@@ -66,6 +68,8 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   uint8_t auth_attempt_{0};
   uint32_t auth_step_deadline_{0};
   uint32_t cccd_fallback_at_{0};
+  uint32_t auth_start_at_{0};
+  uint32_t auth_delay_ms_{1000};
 
   wuzhi_proto::FrameReassembler reassembler_;
   uint8_t sn_{0};
