@@ -1,0 +1,100 @@
+# Public firmware for an ESP32-C3 Super Mini as a BLE bridge to a Wuzhi ZK-502MT amp.
+# No secrets: Wi-Fi is set up while flashing (web.esphome.io) or through the
+# "Wuzhi Amp Setup" hotspot, and Home Assistant sets the encryption key when it adopts
+# the device. The amp is found automatically. See esphome/README.md.
+#
+# Lean variant: Home Assistant only, no web page. wuzhi-amp-web.yaml adds the web page.
+
+substitutions:
+  name: wuzhi-amp
+  friendly_name: Wuzhi Amp
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  # Each board gets its own name (wuzhi-amp-a1b2c3), so several can coexist.
+  name_add_mac_suffix: true
+  project:
+    name: deulfi.wuzhi-amp-bridge
+    version: "0.1.0"
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/Deulfi/Fuzhiapp
+      ref: esphome-bridge
+      path: esphome/components
+    components: [wuzhi_amp]
+
+# Lets "Take control" in the ESPHome Device Builder turn this into an editable config.
+dashboard_import:
+  package_import_url: github://Deulfi/Fuzhiapp/esphome/firmware/wuzhi-amp-lean.yaml@esphome-bridge
+  import_full_config: false
+
+logger:
+  level: INFO
+
+api:
+  # No key here: Home Assistant provisions one when it adopts the device.
+  encryption: {}
+
+ota:
+  - platform: esphome
+    encryption: {}
+
+wifi:
+  ap:
+    ssid: "Wuzhi Amp Setup"
+
+captive_portal:
+
+improv_serial:
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+ble_client:
+  # 00:00:00:00:00:00 = adopt the first amp named "wuzhi..." and remember it.
+  - mac_address: "00:00:00:00:00:00"
+    id: amp_ble
+
+wuzhi_amp:
+  ble_client_id: amp_ble
+
+number:
+  - platform: wuzhi_amp
+    gain:
+      name: Gain
+      max_gain: 40
+
+select:
+  - platform: wuzhi_amp
+    source:
+      name: Source
+    eq:
+      name: EQ
+
+binary_sensor:
+  - platform: wuzhi_amp
+    aux_cable:
+      name: AUX cable
+    bluetooth_audio:
+      name: Bluetooth audio
+    connected:
+      name: Amp connected
+
+switch:
+  - platform: wuzhi_amp
+    aux_priority:
+      name: AUX priority
+
+button:
+  - platform: wuzhi_amp
+    forget_amp:
+      name: Forget amp

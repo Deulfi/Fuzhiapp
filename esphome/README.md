@@ -104,7 +104,9 @@ Each connection gets exactly one auth attempt. The amp ignores a second challeng
 
 | Path | Content |
 |---|---|
-| `wuzhi-amp.yaml` | ESPHome config for the ESP32-C3 Super Mini |
+| `wuzhi-amp.yaml` | ESPHome config for the ESP32-C3 Super Mini (your own build, with secrets) |
+| `firmware/wuzhi-amp-lean.yaml`, `firmware/wuzhi-amp-web.yaml` | Configs for the public firmware files, no secrets |
+| `../.github/workflows/esphome-firmware.yml` | Builds the firmware files; tags `esphome-v*` publish a release |
 | `secrets.example.yaml` | Template for `secrets.yaml` (Wi-Fi, API key) |
 | `components/wuzhi_amp/button.py` | Forget amp button |
 | `components/wuzhi_amp/` | The external component |
@@ -144,7 +146,26 @@ You need:
 - the amp switched on, within a few metres of the board,
 - Home Assistant on the same network, if you want it there (optional for this milestone).
 
-There are two ways to build: with an ESPHome Device Builder you already run (Home Assistant add-on, Docker or LXC), or with the ESPHome command line on your PC.
+There are three ways: flash a ready-made firmware file (simplest, no ESPHome install), build with an ESPHome Device Builder you already run (Home Assistant add-on, Docker or LXC), or build with the ESPHome command line on your PC.
+
+## Flashing a ready-made firmware file
+
+Two variants, built by GitHub Actions from `firmware/`:
+
+| File | Content |
+|---|---|
+| `wuzhi-amp-lean-factory.bin` | Home Assistant only. Least RAM. |
+| `wuzhi-amp-web-factory.bin` | Also a control page on the board (`http://wuzhi-amp-xxxxxx.local`), for use without Home Assistant. |
+
+Both contain gain, source, EQ, AUX cable, Bluetooth audio, amp connected, AUX priority and Forget amp. Nothing to configure: no Wi-Fi password or key in the file, and the amp is found by name.
+
+1. Download a `factory.bin` from the releases page (tags `esphome-v...`), or from the artifacts of the latest "ESPHome firmware" run under Actions.
+2. Plug the board into the PC, open https://web.esphome.io in Chrome or Edge, click Connect, pick the board's port, then Install and select the file. If no port shows up, hold BOOT while plugging the board in.
+3. After flashing, the same page offers to set up Wi-Fi ("Configure Wi-Fi"). If you skip that, the board opens a hotspot "Wuzhi Amp Setup"; join it and pick your network on the page that opens.
+4. Close the PWA and vendor app so the amp advertises. The board finds it within a few seconds.
+5. Home Assistant discovers the board (Settings, Devices and services). Adopting it sets the encryption key; no key needs to be typed.
+
+Updates: flash the `ota.bin` of a newer release from the board's web page (web variant) or with Install, then Wirelessly, after "Take control" in the ESPHome Device Builder. "Take control" turns the board into a normal Device Builder config that you can edit.
 
 ## Flashing with the ESPHome Device Builder
 
@@ -300,4 +321,4 @@ They check the E1 vectors from `docs/PROTOCOL.md` section 4, the frame examples 
 ## Next steps
 
 - Test EQ and AUX priority on the amp.
-- Public firmware files (with and without the web page).
+- Point the public configs at `main` once the bridge is merged.

@@ -601,8 +601,9 @@ void WuzhiAmp::set_source_(proto::Source s, const char *why) {
       (s == proto::Source::BLUETOOTH || s == proto::Source::IDLE)) {
     this->enforce_priority_(s == proto::Source::IDLE ? "amp went idle" : "Bluetooth took over");
   }
-  // A source change often means Bluetooth audio connected or dropped: re-read it.
-  if (this->needs_target_poll_() && this->link_ == Link::READY) this->query_target_info_now_();
+  // A source change often means Bluetooth audio connected or dropped: re-read it. Not for the
+  // first value after connecting, which comes from the reads just made.
+  if (was_known && this->needs_target_poll_() && this->link_ == Link::READY) this->query_target_info_now_();
 }
 
 void WuzhiAmp::publish_source_() {

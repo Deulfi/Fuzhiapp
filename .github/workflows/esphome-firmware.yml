@@ -1,0 +1,55 @@
+# Builds the public ESP32-C3 bridge firmware. Every push that touches esphome/ produces
+# downloadable artifacts; a tag "esphome-v*" also publishes them as a GitHub release.
+name: ESPHome firmware
+
+on:
+  push:
+    branches: [main, esphome-bridge]
+    paths: [esphome/**, .github/workflows/esphome-firmware.yml]
+    tags: ["esphome-v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [lean, web]
+    steps:
+      - uses: actions/checkout@v4
+      - id: esphome
+        uses: esphome/build-action@v8.1.0
+        with:
+          yaml-file: esphome/firmware/wuzhi-amp-${{ matrix.variant }}.yaml
+      - name: Name files by variant
+        run: |
+          mkdir -p out
+          for f in "${{ steps.esphome.outputs.name }}"/*.bin; do
+            cp "$f" "out/wuzhi-amp-${{ matrix.variant }}-$(basename "$f" | sed 's/.*\.\(factory\|ota\)\.bin$/\1/').bin"
+          done
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wuzhi-amp-${{ matrix.variant }}
+          path: out/*.bin
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/esphome-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.bin \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ESP32 bridge $GITHUB_REF_NAME" \
+            --notes "Firmware for an ESP32-C3 Super Mini. factory.bin: first flash over USB (web.esphome.io). ota.bin: update over Wi-Fi. lean: Home Assistant only. web: adds a control page on the board."
