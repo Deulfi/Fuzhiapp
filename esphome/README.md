@@ -55,7 +55,6 @@ The Device Builder fetches the component from GitHub, so no files need to be cop
    wifi_ssid: "..."
    wifi_password: "..."
    api_key: "..."
-   ota_password: "..."
    amp_mac: "00:00:00:00:00:00"
    ```
 
@@ -126,7 +125,7 @@ Generate an API encryption key:
 $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Fill($b); [Convert]::ToBase64String($b)
 ```
 
-Open `secrets.yaml` and fill in your Wi-Fi name and password, the generated `api_key`, and an `ota_password` of your choice. Leave `amp_mac` at `00:00:00:00:00:00` for now.
+Open `secrets.yaml` and fill in your Wi-Fi name and password, and the generated `api_key`. OTA updates use the same key. Leave `amp_mac` at `00:00:00:00:00:00` for now.
 
 ### 4. First flash over USB and find the amp's address
 

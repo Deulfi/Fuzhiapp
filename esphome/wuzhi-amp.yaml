@@ -5,7 +5,6 @@
 #   wifi_ssid: "..."
 #   wifi_password: "..."
 #   api_key: "..."          # 32-byte base64, see README
-#   ota_password: "..."
 #   amp_mac: "AA:BB:CC:DD:EE:FF"
 
 esphome:
@@ -39,7 +38,8 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    # Uses the api encryption key; no separate OTA password.
+    encryption: {}
 
 wifi:
   ssid: !secret wifi_ssid
@@ -58,9 +58,13 @@ esp32_ble_tracker:
   on_ble_advertise:
     - then:
         - lambda: |-
-            if (x.get_name().rfind("Wuzhi", 0) == 0 || x.get_name().rfind("wuzhi", 0) == 0) {
-              ESP_LOGI("find_amp", "Found %s, address %s, RSSI %d",
-                       x.get_name().c_str(), x.address_str().c_str(), x.get_rssi());
+            const char *name = x.get_name().c_str();
+            if (strncmp(name, "Wuzhi", 5) == 0 || strncmp(name, "wuzhi", 5) == 0) {
+              uint64_t a = x.address_uint64();
+              ESP_LOGI("find_amp", "Found %s, address %02X:%02X:%02X:%02X:%02X:%02X, RSSI %d", name,
+                       (unsigned) (a >> 40) & 0xff, (unsigned) (a >> 32) & 0xff, (unsigned) (a >> 24) & 0xff,
+                       (unsigned) (a >> 16) & 0xff, (unsigned) (a >> 8) & 0xff, (unsigned) a & 0xff,
+                       x.get_rssi());
             }
 
 ble_client:

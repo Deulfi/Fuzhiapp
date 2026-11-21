@@ -72,8 +72,12 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
       }
       this->write_handle_ = wr->handle;
       this->notify_handle_ = nt->handle;
-      auto err = esp_ble_gattc_register_for_notify(this->parent()->get_gattc_if(), this->parent()->get_remote_bda(),
-                                                   nt->handle);
+      // ble_client marks every node ESTABLISHED at SEARCH_CMPL and then frees its GATT cache once
+      // all nodes are established and no counted notify registration is pending. The CCCD lookup
+      // needs that cache, so: stay CONNECTED until notifications are on, and register through
+      // the client so the registration is counted.
+      this->node_state = espbt::ClientState::CONNECTED;
+      auto err = this->parent()->register_for_notify(nt->handle);
       if (err != ESP_OK) {
         ESP_LOGE(TAG, "register_for_notify failed: %d", err);
         break;
@@ -88,23 +92,28 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
         ESP_LOGE(TAG, "Notify registration failed: %d", param->reg_for_notify.status);
         break;
       }
-      // ble_client now writes the CCCD; auth starts when that write is confirmed
+      // ble_client has now sent the CCCD write; auth starts when it is confirmed
       // (ESP_GATTC_WRITE_DESCR_EVT), or after a short fallback delay.
-      this->node_state = espbt::ClientState::ESTABLISHED;
       this->cccd_fallback_at_ = millis() + CCCD_FALLBACK_MS;
       break;
 
     case ESP_GATTC_WRITE_DESCR_EVT:
       if (this->link_ != Link::DISCOVERED || this->cccd_fallback_at_ == 0) break;
       if (param->write.status != ESP_GATT_OK) {
-        ESP_LOGW(TAG, "CCCD write status %d", param->write.status);
+        ESP_LOGW(TAG, "Enabling notifications on AE02 failed, status %d", param->write.status);
+      } else {
+        ESP_LOGD(TAG, "Notifications on AE02 enabled");
       }
       this->cccd_fallback_at_ = 0;
+      this->node_state = espbt::ClientState::ESTABLISHED;
       this->start_auth_();
       break;
 
     case ESP_GATTC_NOTIFY_EVT:
       if (param->notify.handle != this->notify_handle_) break;
+      if (this->link_ == Link::AUTHENTICATING) {
+        ESP_LOGD(TAG, "auth rx %u bytes", static_cast<unsigned>(param->notify.value_len));
+      }
       this->on_notify_(param->notify.value, param->notify.value_len);
       break;
 
@@ -118,7 +127,8 @@ void WuzhiAmp::loop() {
 
   if (this->link_ == Link::DISCOVERED && this->cccd_fallback_at_ != 0 &&
       static_cast<int32_t>(now - this->cccd_fallback_at_) >= 0) {
-    ESP_LOGD(TAG, "No CCCD write confirmation seen, starting auth anyway");
+    ESP_LOGW(TAG, "No confirmation for enabling notifications, starting auth anyway");
+    this->node_state = espbt::ClientState::ESTABLISHED;
     this->cccd_fallback_at_ = 0;
     this->start_auth_();
   }
@@ -202,7 +212,9 @@ void WuzhiAmp::on_notify_(const uint8_t *data, size_t len) {
 void WuzhiAmp::on_frame_(const proto::Frame &f) {
   // Raw frame bytes may contain the amp's address and ID string (TargetInfo replies),
   // so they are only logged with log_private.
-  if (this->log_private_) ESP_LOGV(TAG, "rx %s", proto::to_hex(f.raw).c_str());
+  if (this->log_private_) {
+    ESP_LOGV(TAG, "rx %s", proto::to_hex(f.raw).c_str());
+  }
 
   if (!f.is_command) {
     for (auto it = this->pending_.begin(); it != this->pending_.end(); ++it) {
