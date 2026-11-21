@@ -2,15 +2,30 @@
 
 An ESP32-C3 Super Mini running ESPHome holds the amp's Bluetooth LE control connection and makes the amp available to Home Assistant over Wi-Fi.
 
-Status: first milestone. The board connects to the amp, runs the 5-step authentication, sends GetTargetInfo (opcode 0x03, read-only) and logs the decoded reply. It does not control anything yet: no gain, source or EQ entities.
+Status: first milestone, tested on a ZK-502MT. The board connects to the amp, runs the 5-step authentication, sends GetTargetInfo (opcode 0x03, read-only) and logs the decoded reply. It does not control anything yet: no gain, source or EQ entities.
 
 The amp accepts only one control connection. While the ESP32 is connected, the phone app (PWA or vendor app) cannot connect, and the other way round. Bluetooth audio from the phone is not affected.
 
 ## What it sends
 
-- On connect: the authentication messages, then GetTargetInfo. Both are read-only. GetTargetInfo can be turned off with `query_target_info: false`.
+- On connect: BLE pairing (if `pair: true`), the authentication messages, then GetTargetInfo. Both are read-only. GetTargetInfo can be turned off with `query_target_info: false`.
 - When the amp pushes a frame that asks for a reply, the bridge sends the same bare acknowledgement the PWA sends.
 - Nothing else. No gain, source or EQ writes.
+
+## Options
+
+```yaml
+wuzhi_amp:
+  ble_client_id: amp_ble
+  query_target_info: true   # read-only GetTargetInfo after auth
+  log_private: false        # show address and ID string in the log
+  auth_delay: 1s            # wait between enabling notifications and the auth challenge
+  pair: true                # BLE pairing (encryption) before auth
+```
+
+`pair: true` is the setting tested so far. Whether the amp needs it is not settled yet; `pair: false` avoids storing a pairing on the amp.
+
+Each connection gets exactly one auth attempt. The amp ignores a second challenge on the same link, and repeated challenges and reconnects once left its control channel stuck until it was power-cycled. After a failed attempt the bridge waits 30 s before reconnecting, doubling up to 10 minutes, and resets after a successful auth.
 
 ## Files
 
@@ -190,7 +205,7 @@ Home Assistant usually discovers the board by itself: Settings, Devices and serv
 | No COM port when flashing | Use a data cable. Hold BOOT while plugging in. |
 | Board doesn't join Wi-Fi | Some C3 Super Mini boards have a weak antenna. Add `output_power: 8.5dB` under `wifi:` and flash over USB. |
 | `Service AE00 with AE01/AE02 not found` | The address in `amp_mac` belongs to a different device. |
-| `auth: timeout waiting for step 2` | The amp didn't answer. Power-cycle the amp and check that nothing else is connected to it. |
+| `auth: timeout waiting for step 2` | The amp didn't answer. Check that nothing else (phone, PC) holds the control connection. If other devices can't connect either, the amp's control channel is stuck: switch the amp off and on. |
 | `device response mismatch` | Not expected on a ZK-502MT. Please open an issue with the log, address redacted. |
 | Phone app can't find the amp | Expected while the ESP32 is connected. Power the board off to use the phone app. |
 

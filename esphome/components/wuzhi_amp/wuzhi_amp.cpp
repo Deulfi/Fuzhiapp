@@ -28,6 +28,8 @@ static const uint32_t AUTH_STEP_TIMEOUT_MS = 2000;  // spec §4: 2 s per step
 static const uint8_t AUTH_MAX_ATTEMPTS = 1;
 static const uint32_t CCCD_FALLBACK_MS = 1000;
 static const uint32_t PAIR_TIMEOUT_MS = 15000;
+static const uint32_t BACKOFF_MIN_MS = 30000;
+static const uint32_t BACKOFF_MAX_MS = 600000;
 
 void WuzhiAmp::setup() {}
 
@@ -35,7 +37,7 @@ void WuzhiAmp::dump_config() {
   ESP_LOGCONFIG(TAG, "Wuzhi amp bridge:");
   ESP_LOGCONFIG(TAG, "  Query target info on connect: %s", YESNO(this->query_target_info_));
   ESP_LOGCONFIG(TAG, "  Log private identifiers: %s", YESNO(this->log_private_));
-  ESP_LOGCONFIG(TAG, "  Auth delay: %u ms", this->auth_delay_ms_);
+  ESP_LOGCONFIG(TAG, "  Auth delay: %u ms", static_cast<unsigned>(this->auth_delay_ms_));
   ESP_LOGCONFIG(TAG, "  Pair: %s", YESNO(this->pair_));
 }
 
@@ -94,7 +96,7 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
         auto err = this->parent()->pair();
         if (err != ESP_OK) {
           ESP_LOGE(TAG, "Starting encryption failed: %d", err);
-          this->parent()->disconnect();
+          this->fail_and_back_off_();
         }
         break;
       }
@@ -154,8 +156,8 @@ void WuzhiAmp::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_pa
   if (memcmp(param->ble_security.auth_cmpl.bd_addr, this->parent()->get_remote_bda(), 6) != 0) return;
   this->pair_deadline_ = 0;
   if (!param->ble_security.auth_cmpl.success) {
-    ESP_LOGE(TAG, "Pairing failed, reason 0x%02x. Disconnecting.", param->ble_security.auth_cmpl.fail_reason);
-    this->parent()->disconnect();
+    ESP_LOGE(TAG, "Pairing failed, reason 0x%02x", param->ble_security.auth_cmpl.fail_reason);
+    this->fail_and_back_off_();
     return;
   }
   ESP_LOGI(TAG, "Link encrypted (auth mode %d)", param->ble_security.auth_cmpl.auth_mode);
@@ -165,11 +167,17 @@ void WuzhiAmp::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_pa
 void WuzhiAmp::loop() {
   const uint32_t now = millis();
 
+  if (this->reconnect_at_ != 0 && static_cast<int32_t>(now - this->reconnect_at_) >= 0) {
+    this->reconnect_at_ = 0;
+    ESP_LOGI(TAG, "Back-off over, allowing reconnect");
+    this->parent()->set_auto_connect(true);
+  }
+
   if (this->link_ == Link::PAIRING && this->pair_deadline_ != 0 &&
       static_cast<int32_t>(now - this->pair_deadline_) >= 0) {
-    ESP_LOGE(TAG, "Pairing timed out, disconnecting");
+    ESP_LOGE(TAG, "Pairing timed out");
     this->pair_deadline_ = 0;
-    this->parent()->disconnect();
+    this->fail_and_back_off_();
   }
 
   if (this->link_ == Link::DISCOVERED && this->cccd_fallback_at_ != 0 &&
@@ -209,17 +217,17 @@ void WuzhiAmp::loop() {
 }
 
 void WuzhiAmp::schedule_auth_() {
-  ESP_LOGD(TAG, "Starting auth in %u ms", this->auth_delay_ms_);
+  ESP_LOGD(TAG, "Starting auth in %u ms", static_cast<unsigned>(this->auth_delay_ms_));
   this->auth_start_at_ = millis() + this->auth_delay_ms_;
   if (this->auth_start_at_ == 0) this->auth_start_at_ = 1;
 }
 
 void WuzhiAmp::start_auth_() {
   if (this->auth_attempt_ >= AUTH_MAX_ATTEMPTS) {
-    ESP_LOGE(TAG, "auth failed, disconnecting (ble_client will reconnect)");
+    ESP_LOGE(TAG, "auth failed");
     this->auth_step_deadline_ = 0;
     this->link_ = Link::DISCOVERED;
-    this->parent()->disconnect();
+    this->fail_and_back_off_();
     return;
   }
   this->auth_attempt_++;
@@ -249,8 +257,22 @@ void WuzhiAmp::handle_auth_step_(const proto::AuthSession::Step &step) {
   }
 }
 
+// A failed attempt disconnects and keeps ble_client from reconnecting for a while. Hammering
+// the amp with challenges and reconnects once left its control channel stuck until a power
+// cycle. Waits 30 s, doubling up to 10 min; reset by a successful auth.
+void WuzhiAmp::fail_and_back_off_() {
+  uint32_t wait = this->backoff_ms_ == 0 ? BACKOFF_MIN_MS : std::min(this->backoff_ms_ * 2, BACKOFF_MAX_MS);
+  this->backoff_ms_ = wait;
+  this->reconnect_at_ = millis() + wait;
+  if (this->reconnect_at_ == 0) this->reconnect_at_ = 1;
+  ESP_LOGW(TAG, "Disconnecting; next connection attempt in %u s", static_cast<unsigned>(wait / 1000));
+  this->parent()->set_auto_connect(false);
+  this->parent()->disconnect();
+}
+
 void WuzhiAmp::on_authenticated_() {
   ESP_LOGI(TAG, "Authenticated with amp");
+  this->backoff_ms_ = 0;
   this->link_ = Link::READY;
   this->reassembler_.reset();
   if (this->query_target_info_) this->query_target_info_now_();

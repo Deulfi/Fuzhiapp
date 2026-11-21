@@ -49,6 +49,7 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
 
   void reset_link_();
   void enable_notifications_();
+  void fail_and_back_off_();
   void schedule_auth_();
   void start_auth_();
   void handle_auth_step_(const wuzhi_proto::AuthSession::Step &step);
@@ -75,6 +76,8 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   uint32_t auth_delay_ms_{1000};
   uint32_t pair_deadline_{0};
   bool pair_{true};
+  uint32_t backoff_ms_{0};
+  uint32_t reconnect_at_{0};
 
   wuzhi_proto::FrameReassembler reassembler_;
   uint8_t sn_{0};
