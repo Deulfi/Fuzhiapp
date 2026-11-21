@@ -514,4 +514,69 @@ std::vector<std::string> describe_tlvs(const TargetInfo &t, bool include_private
   return lines;
 }
 
+// --------------------------------------------------------------- SysInfo ---
+
+Bytes sys_info_public_all_payload() { return Bytes{0xFF, 0x00, 0x00, 0xFF, 0xF7}; }
+
+Bytes set_gain_payload(int value, int cap) {
+  if (cap < 0 || cap > GAIN_LIMIT_MAX || value < 0 || value > cap) return Bytes{};
+  return Bytes{0xFF, 0x02, VOLUME_ATTR, static_cast<uint8_t>(value)};
+}
+
+int next_gain_step(int from, int to) {
+  if (to > from) return from + 1;
+  if (to < from) return from - 1;
+  return from;
+}
+
+bool parse_sys_info(const Bytes &payload, SysInfo &s) {
+  s = SysInfo{};
+  if (payload.empty()) return false;
+  s.function = payload[0];
+  if (!parse_tlvs(payload.data() + 1, payload.size() - 1, s.tlvs)) return false;
+  s.is_public = s.function == 0xFF;
+  if (!s.is_public) return true;
+  for (const Tlv &t : s.tlvs) {
+    const Bytes &d = t.data;
+    if (t.type == 1 && d.size() >= 1) {
+      s.has_volume = true;
+      s.volume = d[0];
+    } else if (t.type == 2 && d.size() >= 1) {
+      s.has_aux = true;
+      s.aux_inserted = (d[0] & 0x10) != 0;
+    } else if (t.type == 4 && d.size() >= 11) {
+      s.has_eq = true;
+      s.eq_mode = d[0];
+      for (int i = 0; i < 10; i++) s.eq_gains[i] = static_cast<int8_t>(d[1 + i]);
+    } else if (t.type == 6 && d.size() >= 1) {
+      s.has_current_function = true;
+      s.current_function = d[0];
+    }
+  }
+  return true;
+}
+
+std::string describe_sys_info(const SysInfo &s) {
+  std::string out;
+  auto add = [&out](const std::string &p) {
+    if (!out.empty()) out += "; ";
+    out += p;
+  };
+  if (!s.is_public) {
+    add(std::string(function_name(s.function)) + " info");
+  } else {
+    if (s.has_volume) add(fmt("gain %u", s.volume));
+    if (s.has_aux) add(std::string("AUX cable ") + (s.aux_inserted ? "in" : "out"));
+    if (s.has_eq) add(fmt("EQ mode %u", s.eq_mode));
+    if (s.has_current_function) add(std::string("current ") + function_name(s.current_function));
+  }
+  std::string types;
+  for (const Tlv &x : s.tlvs) {
+    if (!types.empty()) types += " ";
+    types += fmt("%x", x.type);
+  }
+  add("attrs [" + types + "]");
+  return out;
+}
+
 }  // namespace wuzhi_proto

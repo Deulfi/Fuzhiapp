@@ -223,7 +223,44 @@ static void test_auth_mismatch() {
   CHECK(a.error().find("mismatch") != std::string::npos);
 }
 
+static void test_gain() {
+  // docs/PROTOCOL.md §3: SetSysInfo volume = 20
+  CHECK_EQ_STR(to_hex(encode_command(op::SET_SYS_INFO, 3, set_gain_payload(20, 40))),
+               "fe dc ba c0 08 00 05 03 ff 02 01 14 ef");
+  CHECK(set_gain_payload(21, 20).empty());  // above the cap
+  CHECK(set_gain_payload(-1, 40).empty());
+  CHECK(set_gain_payload(30, 41).empty());  // cap itself out of range
+  CHECK(!set_gain_payload(0, 0).empty());
+  CHECK(next_gain_step(10, 15) == 11);
+  CHECK(next_gain_step(10, 5) == 9);
+  CHECK(next_gain_step(7, 7) == 7);
+  CHECK_EQ_STR(to_hex(sys_info_public_all_payload()), "ff 00 00 ff f7");
+}
+
+static void test_sys_info() {
+  // public: volume 20, attr 2 with bit 4 (AUX cable in), EQ mode 1 + 10 gains, current AUX
+  Bytes p = from_hex("ff 02 01 14 02 02 10 0c 04 01 00 01 02 fe ff 00 00 00 00 00 02 06 03");
+  SysInfo s;
+  CHECK(parse_sys_info(p, s));
+  CHECK(s.is_public && s.has_volume && s.volume == 20);
+  CHECK(s.has_aux && s.aux_inserted);
+  CHECK(s.has_eq && s.eq_mode == 1 && s.eq_gains[3] == -2 && s.eq_gains[4] == -1);
+  CHECK(s.has_current_function && s.current_function == 3);
+  CHECK_EQ_STR(describe_sys_info(s), "gain 20; AUX cable in; EQ mode 1; current AUX; attrs [1 2 4 6]");
+
+  // function-specific push after switching to AUX: 03 02 00 01
+  SysInfo f;
+  CHECK(parse_sys_info(from_hex("03 02 00 01"), f));
+  CHECK(!f.is_public && f.function == 3 && !f.has_volume);
+
+  SysInfo bad;
+  CHECK(!parse_sys_info(from_hex("ff 05 01 14"), bad));
+  CHECK(!parse_sys_info(Bytes{}, bad));
+}
+
 int main() {
+  test_gain();
+  test_sys_info();
   test_e1_vectors();
   test_encode();
   test_reassembler();

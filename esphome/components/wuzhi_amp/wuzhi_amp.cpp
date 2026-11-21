@@ -5,6 +5,7 @@
 #include <esp_gattc_api.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "esphome/core/hal.h"
@@ -30,8 +31,9 @@ static const uint32_t CCCD_FALLBACK_MS = 1000;
 static const uint32_t PAIR_TIMEOUT_MS = 15000;
 static const uint32_t BACKOFF_MIN_MS = 30000;
 static const uint32_t BACKOFF_MAX_MS = 600000;
+static const uint32_t GAIN_STEP_MS = 120;  // one step of 1 every 120 ms, like the PWA
 
-void WuzhiAmp::setup() {}
+void WuzhiAmp::setup() { this->publish_gain_(); }  // unknown until the amp reports it
 
 void WuzhiAmp::dump_config() {
   ESP_LOGCONFIG(TAG, "Wuzhi amp bridge:");
@@ -39,6 +41,9 @@ void WuzhiAmp::dump_config() {
   ESP_LOGCONFIG(TAG, "  Log private identifiers: %s", YESNO(this->log_private_));
   ESP_LOGCONFIG(TAG, "  Auth delay: %u ms", static_cast<unsigned>(this->auth_delay_ms_));
   ESP_LOGCONFIG(TAG, "  Pair: %s", YESNO(this->pair_));
+#ifdef USE_NUMBER
+  if (this->gain_number_ != nullptr) ESP_LOGCONFIG(TAG, "  Gain number, cap %d", this->max_gain_);
+#endif
 }
 
 void WuzhiAmp::reset_link_() {
@@ -54,6 +59,11 @@ void WuzhiAmp::reset_link_() {
   this->reassembler_.reset();
   this->sn_ = 0;
   this->pending_.clear();
+  this->gain_current_ = -1;
+  this->gain_target_ = -1;
+  this->gain_in_flight_ = false;
+  this->gain_next_at_ = 0;
+  this->publish_gain_();
 }
 
 void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
@@ -88,8 +98,8 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
       // needs that cache, so: stay CONNECTED until notifications are on.
       this->node_state = espbt::ClientState::CONNECTED;
       if (this->pair_) {
-        // The amp ignores AE01 writes on an unencrypted link (an unpaired PC gets no auth reply
-        // either). Encrypt first; with a stored bond this just resumes encryption.
+        // Optional: the ZK-502MT also works without it. With a stored bond this just
+        // resumes encryption.
         ESP_LOGI(TAG, "Pairing / encrypting the link");
         this->link_ = Link::PAIRING;
         this->pair_deadline_ = millis() + PAIR_TIMEOUT_MS;
@@ -194,6 +204,8 @@ void WuzhiAmp::loop() {
     this->start_auth_();
   }
 
+  if (this->link_ == Link::READY) this->step_gain_();
+
   if (this->link_ == Link::AUTHENTICATING && this->auth_step_deadline_ != 0 &&
       static_cast<int32_t>(now - this->auth_step_deadline_) >= 0) {
     ESP_LOGW(TAG, "auth: timeout waiting for step %d", this->auth_.waiting_step());
@@ -276,6 +288,10 @@ void WuzhiAmp::on_authenticated_() {
   this->link_ = Link::READY;
   this->reassembler_.reset();
   if (this->query_target_info_) this->query_target_info_now_();
+#ifdef USE_NUMBER
+  // Read-only; only when an entity needs the amp's state.
+  if (this->gain_number_ != nullptr) this->query_sys_info_now_();
+#endif
 }
 
 void WuzhiAmp::on_notify_(const uint8_t *data, size_t len) {
@@ -310,9 +326,13 @@ void WuzhiAmp::on_frame_(const proto::Frame &f) {
     return;
   }
 
-  // Device push. Decoding of 0x21 (source) and 0x09 (SysInfo) comes in the next milestone.
+  // Device push. 0x09 = SysInfo changed (same layout as a GetSysInfo reply).
   ESP_LOGD(TAG, "Push: opcode 0x%02x, %u payload bytes: %s", f.opcode, static_cast<unsigned>(f.payload.size()),
            proto::to_hex(f.payload).c_str());
+  if (f.opcode == proto::op::SYS_INFO_PUSH) {
+    proto::SysInfo s;
+    if (proto::parse_sys_info(f.payload, s)) this->apply_sys_info_(s, "push");
+  }
   if (f.expects_response) this->write_(proto::ack_for(f));  // bare ack (D6), as the PWA does
 }
 
@@ -363,6 +383,95 @@ void WuzhiAmp::query_target_info_now_() {
     ESP_LOGI(TAG, "Target info: %s", proto::describe_target_info(info).c_str());
     for (const auto &line : proto::describe_tlvs(info, this->log_private_)) ESP_LOGI(TAG, "  %s", line.c_str());
   });
+}
+
+void WuzhiAmp::query_sys_info_now_() {
+  ESP_LOGD(TAG, "Sending GetSysInfo");
+  this->request_(proto::op::GET_SYS_INFO, proto::sys_info_public_all_payload(), [this](const proto::Frame *reply) {
+    if (reply == nullptr) return;
+    if (reply->status != 0) {
+      ESP_LOGW(TAG, "GetSysInfo: status 0x%02x", reply->status);
+      return;
+    }
+    proto::SysInfo s;
+    if (!proto::parse_sys_info(reply->payload, s)) {
+      ESP_LOGW(TAG, "GetSysInfo: bad TLV list (%u bytes)", static_cast<unsigned>(reply->payload.size()));
+      return;
+    }
+    this->apply_sys_info_(s, "read");
+  });
+}
+
+void WuzhiAmp::apply_sys_info_(const proto::SysInfo &s, const char *source) {
+  ESP_LOGI(TAG, "Sys info (%s): %s", source, proto::describe_sys_info(s).c_str());
+  if (s.has_volume) {
+    this->gain_current_ = s.volume;
+    // While stepping, the step replies drive the state; a push only confirms it.
+    if (!this->gain_in_flight_) this->publish_gain_();
+  }
+}
+
+void WuzhiAmp::publish_gain_() {
+#ifdef USE_NUMBER
+  if (this->gain_number_ == nullptr) return;
+  this->gain_number_->publish_state(this->gain_current_ < 0 ? NAN : static_cast<float>(this->gain_current_));
+#endif
+}
+
+void WuzhiAmp::request_gain(float value) {
+  if (this->link_ != Link::READY || this->gain_current_ < 0) {
+    ESP_LOGW(TAG, "Gain change ignored: amp not connected or gain not known yet");
+    this->publish_gain_();  // put the entity back
+    return;
+  }
+  if (std::isnan(value)) return;
+  int target = static_cast<int>(std::lround(value));
+  if (target < 0) target = 0;
+  if (target > this->max_gain_) {
+    ESP_LOGW(TAG, "Gain %d is above the cap %d, using %d", target, this->max_gain_, this->max_gain_);
+    target = this->max_gain_;
+  }
+  ESP_LOGI(TAG, "Gain %d -> %d", this->gain_current_, target);
+  this->gain_target_ = target;  // a new value while stepping just moves the target
+}
+
+void WuzhiAmp::step_gain_() {
+  if (this->gain_target_ < 0 || this->gain_in_flight_ || this->gain_current_ < 0) return;
+  if (this->gain_target_ == this->gain_current_) {
+    this->gain_target_ = -1;
+    this->publish_gain_();
+    return;
+  }
+  if (this->gain_next_at_ != 0 && static_cast<int32_t>(millis() - this->gain_next_at_) < 0) return;
+
+  // Above the cap (set elsewhere, e.g. the vendor app): go straight down to the cap, since
+  // stepping down would send values above it. Down is the safe direction.
+  const int next = this->gain_current_ > this->max_gain_ ? this->max_gain_
+                                                         : proto::next_gain_step(this->gain_current_, this->gain_target_);
+  proto::Bytes payload = proto::set_gain_payload(next, this->max_gain_);
+  if (payload.empty()) {  // can't happen with a clamped target; never send it anyway
+    ESP_LOGE(TAG, "Refusing gain %d (cap %d)", next, this->max_gain_);
+    this->gain_target_ = -1;
+    return;
+  }
+  this->gain_in_flight_ = true;
+  bool sent = this->request_(proto::op::SET_SYS_INFO, payload, [this, next](const proto::Frame *reply) {
+    this->gain_in_flight_ = false;
+    this->gain_next_at_ = millis() + GAIN_STEP_MS;
+    if (reply == nullptr || reply->status != 0) {
+      ESP_LOGW(TAG, "Gain step to %d not confirmed, stopping", next);
+      this->gain_target_ = -1;
+      this->publish_gain_();
+      return;
+    }
+    this->gain_current_ = next;
+    this->publish_gain_();
+  });
+  if (!sent) {
+    this->gain_in_flight_ = false;
+    this->gain_target_ = -1;
+    this->publish_gain_();
+  }
 }
 
 }  // namespace wuzhi_amp

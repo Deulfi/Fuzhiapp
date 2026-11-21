@@ -79,6 +79,13 @@ wuzhi_amp:
   log_private: false
   # Wait between enabling notifications and sending the auth challenge (default 1s).
   auth_delay: 1s
-  # Pair with the amp and encrypt the link before auth (default true). Probably needed on the
-  # ZK-502MT: an unpaired PC gets no auth reply either (not yet confirmed with the ESP32).
-  pair: true
+  # BLE pairing (encryption) before auth (default false). The ZK-502MT works without it.
+  pair: false
+
+number:
+  - platform: wuzhi_amp
+    gain:
+      name: Gain
+      # Highest value the bridge will ever send (0-40, default 40). The ZK-502MT uses
+      # 0-30 and ignores 31-40.
+      max_gain: 40

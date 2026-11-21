@@ -2,15 +2,33 @@
 
 An ESP32-C3 Super Mini running ESPHome holds the amp's Bluetooth LE control connection and makes the amp available to Home Assistant over Wi-Fi.
 
-Status: first milestone, tested on a ZK-502MT. The board connects to the amp, runs the 5-step authentication, sends GetTargetInfo (opcode 0x03, read-only) and logs the decoded reply. It does not control anything yet: no gain, source or EQ entities.
+Status: the board connects to a ZK-502MT, runs the 5-step authentication and logs the decoded GetTargetInfo (tested). Gain as a number entity is new and not yet tested on the amp. No source or EQ entities yet.
 
 The amp accepts only one control connection. While the ESP32 is connected, the phone app (PWA or vendor app) cannot connect, and the other way round. Bluetooth audio from the phone is not affected.
 
 ## What it sends
 
-- On connect: BLE pairing (if `pair: true`), the authentication messages, then GetTargetInfo. Both are read-only. GetTargetInfo can be turned off with `query_target_info: false`.
+- On connect: the authentication messages (with `pair: true`, BLE pairing first), then GetTargetInfo. Both are read-only. GetTargetInfo can be turned off with `query_target_info: false`.
 - When the amp pushes a frame that asks for a reply, the bridge sends the same bare acknowledgement the PWA sends.
-- Nothing else. No gain, source or EQ writes.
+- With the gain number configured: one read-only GetSysInfo after auth, to learn the current gain.
+- Gain writes only when you change the gain number (Home Assistant or the web page), never on connect, boot or Home Assistant reconnect. See "Gain" below.
+- Nothing else. No source or EQ writes yet.
+
+## Gain
+
+```yaml
+number:
+  - platform: wuzhi_amp
+    gain:
+      name: Gain
+      max_gain: 40
+```
+
+- The number is the amp's digital level (public attribute 1), the same as the PWA's gain slider. The ZK-502MT uses 0-30 and ignores 31-40.
+- `max_gain` (0-40, default 40) is the cap. The bridge never sends a value above it; higher requests are lowered to the cap.
+- Changes are stepped by 1 every 120 ms, each step confirmed by the amp, never a jump upward. If the amp reports a value above the cap (set by another app), the first write goes straight down to the cap.
+- The number shows as unknown until the amp has reported its gain, and again after a disconnect. Changes made then are ignored.
+- Changes from elsewhere (the amp pushes them) update the number.
 
 ## Options
 
@@ -20,10 +38,10 @@ wuzhi_amp:
   query_target_info: true   # read-only GetTargetInfo after auth
   log_private: false        # show address and ID string in the log
   auth_delay: 1s            # wait between enabling notifications and the auth challenge
-  pair: true                # BLE pairing (encryption) before auth
+  pair: false               # BLE pairing (encryption) before auth
 ```
 
-`pair: true` is the setting tested so far. Whether the amp needs it is not settled yet; `pair: false` avoids storing a pairing on the amp.
+Both settings of `pair` work on the ZK-502MT. The default is off.
 
 Each connection gets exactly one auth attempt. The amp ignores a second challenge on the same link, and repeated challenges and reconnects once left its control channel stuck until it was power-cycled. After a failed attempt the bridge waits 30 s before reconnecting, doubling up to 10 minutes, and resets after a successful auth.
 
@@ -36,6 +54,7 @@ Each connection gets exactly one auth attempt. The amp ignores a second challeng
 | `components/wuzhi_amp/` | The external component |
 | `components/wuzhi_amp/wuzhi_protocol.*` | Protocol core in plain C++ (auth, frames, TargetInfo parser), a port of `src/protocol/` |
 | `components/wuzhi_amp/wuzhi_amp.*` | ESPHome glue on top of `ble_client` |
+| `components/wuzhi_amp/number.py` | Gain number entity |
 | `tests/test_protocol.cpp` | Host tests for the protocol core |
 
 ## Privacy
@@ -231,7 +250,6 @@ They check the E1 vectors from `docs/PROTOCOL.md` section 4, the frame examples 
 
 In this order, each one tested on the amp before the next:
 
-1. Gain as a number entity, capped (default 40), stepped by 1.
-2. Source BT/AUX as a select, with live updates from the 0x21 push.
-3. EQ preset as a select, AUX cable in as a binary sensor.
-4. Optional AUX priority.
+1. Source BT/AUX as a select, with live updates from the 0x21 push.
+2. EQ preset as a select, AUX cable in as a binary sensor.
+3. Optional AUX priority.

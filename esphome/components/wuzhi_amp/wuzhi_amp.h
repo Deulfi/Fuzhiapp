@@ -8,6 +8,10 @@
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #include "esphome/core/component.h"
+#include "esphome/core/helpers.h"
+#ifdef USE_NUMBER
+#include "esphome/components/number/number.h"
+#endif
 
 #include "wuzhi_protocol.h"
 
@@ -17,7 +21,8 @@ namespace wuzhi_amp {
 namespace espbt = esphome::esp32_ble_tracker;
 
 // BLE bridge to a Wuzhi ZK-502MT amp (Jieli RCSP over GATT service AE00).
-// Milestone 1: connect, run the 5-step auth, send GetTargetInfo, log the decoded reply.
+// Connects, runs the 5-step auth, sends GetTargetInfo and logs the decoded reply. With a gain
+// number configured it also reads GetSysInfo, follows the 0x09 push and steps gain.
 class WuzhiAmp : public Component, public ble_client::BLEClientNode {
  public:
   void setup() override;
@@ -35,6 +40,13 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   void set_pair(bool v) { this->pair_ = v; }
 
   bool is_ready() const { return this->link_ == Link::READY; }
+
+#ifdef USE_NUMBER
+  void set_gain_number(number::Number *n) { this->gain_number_ = n; }
+#endif
+  void set_max_gain(int v) { this->max_gain_ = v; }
+  // From the gain number (Home Assistant, web page). Steps toward the value, capped.
+  void request_gain(float value);
 
  protected:
   enum class Link { DISCONNECTED, PAIRING, DISCOVERED, AUTHENTICATING, READY };
@@ -63,6 +75,10 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
                 uint32_t timeout_ms = 2000);
 
   void query_target_info_now_();
+  void query_sys_info_now_();
+  void apply_sys_info_(const wuzhi_proto::SysInfo &s, const char *source);
+  void step_gain_();
+  void publish_gain_();
 
   uint16_t write_handle_{0};
   uint16_t notify_handle_{0};
@@ -75,7 +91,7 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   uint32_t auth_start_at_{0};
   uint32_t auth_delay_ms_{1000};
   uint32_t pair_deadline_{0};
-  bool pair_{true};
+  bool pair_{false};
   uint32_t backoff_ms_{0};
   uint32_t reconnect_at_{0};
 
@@ -85,7 +101,24 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
 
   bool log_private_{false};
   bool query_target_info_{true};
+
+  // gain (attr 1). -1 = not known yet.
+#ifdef USE_NUMBER
+  number::Number *gain_number_{nullptr};
+#endif
+  int max_gain_{40};
+  int gain_current_{-1};
+  int gain_target_{-1};
+  bool gain_in_flight_{false};
+  uint32_t gain_next_at_{0};
 };
+
+#ifdef USE_NUMBER
+class GainNumber : public number::Number, public Parented<WuzhiAmp> {
+ protected:
+  void control(float value) override { this->parent_->request_gain(value); }
+};
+#endif
 
 }  // namespace wuzhi_amp
 }  // namespace esphome

@@ -32,9 +32,9 @@ CONFIG_SCHEMA = (
             cv.Optional(
                 CONF_AUTH_DELAY, default="1s"
             ): cv.positive_time_period_milliseconds,
-            # Pair with the amp and encrypt the link before auth. The amp ignores
-            # control writes on an unencrypted link.
-            cv.Optional(CONF_PAIR, default=True): cv.boolean,
+            # Pair with the amp and encrypt the link before auth. Not needed on the
+            # ZK-502MT (tested both ways); kept for other models.
+            cv.Optional(CONF_PAIR, default=False): cv.boolean,
         }
     )
     .extend(ble_client.BLE_CLIENT_SCHEMA)

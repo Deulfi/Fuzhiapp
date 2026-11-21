@@ -165,4 +165,40 @@ std::string describe_target_info(const TargetInfo &t);
 // platform string (type 3) and the BLE address (type 17) are masked.
 std::vector<std::string> describe_tlvs(const TargetInfo &t, bool include_private);
 
+// ------------------------------------------------- GetSysInfo (§6.2, §6.3) ---
+
+// GetSysInfo public, mask 0x0000FFF7 (the app's startup query): ff 00 00 ff f7
+Bytes sys_info_public_all_payload();
+
+// Gain is the public volume attribute (attr 1). The amp reports 0-30 and ignores 31-40; it
+// does not clamp, so the host must (DECISIONS.md, "From the write tests").
+constexpr uint8_t VOLUME_ATTR = 0x01;
+constexpr int GAIN_LIMIT_MAX = 40;  // highest cap a user can configure, like the PWA slider
+
+// SetSysInfo payload for gain v: ff 02 01 v. Returns an empty vector if v is above the cap
+// (or the cap is above GAIN_LIMIT_MAX), so a refused value can never reach the amp.
+Bytes set_gain_payload(int value, int cap);
+
+// One step from `from` toward `to` (gainSteps() in src/app/state.ts). Returns `from` if equal.
+int next_gain_step(int from, int to);
+
+struct SysInfo {
+  uint8_t function{0};
+  bool is_public{false};
+  bool has_volume{false};
+  uint8_t volume{0};  // attr 1
+  bool has_aux{false};
+  bool aux_inserted{false};  // attr 2, byte 0 bit 4
+  bool has_eq{false};
+  uint8_t eq_mode{0};  // attr 4: mode + 10 signed gains
+  int8_t eq_gains[10]{};
+  bool has_current_function{false};
+  uint8_t current_function{0};  // attr 6
+  std::vector<Tlv> tlvs;
+};
+
+// GetSysInfo reply or 0x09 push payload: [function][TLVs]. Returns false if malformed.
+bool parse_sys_info(const Bytes &payload, SysInfo &out);
+std::string describe_sys_info(const SysInfo &s);
+
 }  // namespace wuzhi_proto
