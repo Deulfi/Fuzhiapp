@@ -1,0 +1,6 @@
+# Wi-Fi and API secrets, the amp address
+secrets.yaml
+# ESPHome build output
+.esphome/
+# host test binary
+tests/build/
