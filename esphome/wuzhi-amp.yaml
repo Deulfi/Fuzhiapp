@@ -94,6 +94,8 @@ select:
   - platform: wuzhi_amp
     source:
       name: Source
+    eq:
+      name: EQ
 
 binary_sensor:
   - platform: wuzhi_amp
@@ -103,3 +105,8 @@ binary_sensor:
       name: Bluetooth audio
     connected:
       name: Amp connected
+
+switch:
+  - platform: wuzhi_amp
+    aux_priority:
+      name: AUX priority

@@ -18,6 +18,9 @@
 #ifdef USE_BINARY_SENSOR
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #endif
+#ifdef USE_SWITCH
+#include "esphome/components/switch/switch.h"
+#endif
 
 #include "wuzhi_protocol.h"
 
@@ -61,6 +64,15 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
 #endif
   // From the source select: 0 Bluetooth, 1 AUX, 2 Idle (display only).
   void request_source(size_t index);
+#ifdef USE_SELECT
+  void set_eq_select(select::Select *s) { this->eq_select_ = s; }
+#endif
+  // From the EQ select: mode 0-6 (Normal .. User).
+  void request_eq(size_t mode);
+#ifdef USE_SWITCH
+  void set_aux_priority_switch(switch_::Switch *s) { this->aux_priority_switch_ = s; }
+#endif
+  void set_aux_priority(bool on);
   // From the gain number (Home Assistant, web page). Steps toward the value, capped.
   void request_gain(float value);
 
@@ -103,6 +115,12 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   void publish_connected_(bool on);
   bool needs_sys_info_() const;
   bool needs_target_poll_() const;
+  void switch_source_(bool to_aux, const char *why);
+  void publish_eq_();
+  void write_eq_(uint8_t mode);
+  void apply_eq_(uint8_t mode, const int8_t gains[10]);
+  void retry_eq_(const char *why);
+  void enforce_priority_(const char *why);
 
   uint16_t write_handle_{0};
   uint16_t notify_handle_{0};
@@ -151,12 +169,47 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   bool source_in_flight_{false};
   bool target_info_logged_{false};
   uint32_t next_target_poll_at_{0};
+
+  // EQ (attr 4)
+#ifdef USE_SELECT
+  select::Select *eq_select_{nullptr};
+#endif
+  int eq_mode_{-1};
+  int8_t eq_gains_[10]{};
+  int eq_sent_mode_{-1};
+  uint32_t eq_sent_at_{0};
+  int eq_pending_mode_{-1};  // refused after power-on (E1), retried when Bluetooth audio starts
+
+  // AUX priority (PWA amp.ts enforcePriority): reacts to changes only, never on connect.
+#ifdef USE_SWITCH
+  switch_::Switch *aux_priority_switch_{nullptr};
+#endif
+  bool aux_priority_{false};
+  bool priority_suspended_{false};  // the user picked Bluetooth
+  bool priority_gave_up_{false};
+  uint32_t priority_tries_[6]{};
+  uint8_t priority_try_count_{0};
+  uint32_t priority_recheck_at_{0};
 };
 
 #ifdef USE_SELECT
 class SourceSelect : public select::Select, public Parented<WuzhiAmp> {
  protected:
   void control(size_t index) override { this->parent_->request_source(index); }
+};
+#endif
+
+#ifdef USE_SELECT
+class EqSelect : public select::Select, public Parented<WuzhiAmp> {
+ protected:
+  void control(size_t index) override { this->parent_->request_eq(index); }
+};
+#endif
+
+#ifdef USE_SWITCH
+class AuxPrioritySwitch : public switch_::Switch, public Parented<WuzhiAmp> {
+ protected:
+  void write_state(bool state) override { this->parent_->set_aux_priority(state); }
 };
 #endif
 

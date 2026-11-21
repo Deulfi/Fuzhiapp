@@ -2,7 +2,7 @@
 
 An ESP32-C3 Super Mini running ESPHome holds the amp's Bluetooth LE control connection and makes the amp available to Home Assistant over Wi-Fi.
 
-Status: the board connects to a ZK-502MT, runs the 5-step authentication and logs the decoded GetTargetInfo (tested). Gain works (tested). Source and the binary sensors are new and not yet tested on the amp. No EQ yet.
+Status: the board connects to a ZK-502MT, runs the 5-step authentication and logs the decoded GetTargetInfo (tested). Gain, source and the binary sensors work (tested). EQ and AUX priority are new and not yet tested on the amp.
 
 The amp accepts only one control connection. While the ESP32 is connected, the phone app (PWA or vendor app) cannot connect, and the other way round. Bluetooth audio from the phone is not affected.
 
@@ -14,7 +14,9 @@ The amp accepts only one control connection. While the ESP32 is connected, the p
 - Gain writes only when you change the gain number (Home Assistant or the web page), never on connect, boot or Home Assistant reconnect. See "Gain" below.
 - Source switches only when you change the source select.
 - With the Bluetooth audio sensor configured: a read-only GetTargetInfo every 30 s and after source changes (the amp has no push for it).
-- Nothing else. No EQ writes yet.
+- EQ writes only when you change the EQ select, or once more when the amp refused it (see below).
+- With AUX priority on: a switch to AUX when the amp leaves AUX while a cable is in (see below).
+- Nothing else.
 
 ## Gain
 
@@ -39,6 +41,8 @@ select:
   - platform: wuzhi_amp
     source:
       name: Source
+    eq:
+      name: EQ
 
 binary_sensor:
   - platform: wuzhi_amp
@@ -56,6 +60,29 @@ binary_sensor:
 - AUX cable: from the amp's state (attribute 2), updated by its push.
 - Bluetooth audio: whether a phone or computer is connected for audio.
 - Amp connected: the bridge holds an authenticated control link.
+- While not connected, gain, AUX cable and Bluetooth audio show as unknown. The two selects keep their last value, because ESPHome selects can't be set back to unknown; use Amp connected to tell.
+
+## EQ
+
+- Presets Normal, Rock, Pop, Classical, Jazz, Country, and User (the last custom gains the amp reported). Custom gains themselves can't be edited here; set them in the PWA.
+- The EQ only affects Bluetooth audio, not AUX.
+- After power-on the amp only accepts an EQ once it has played Bluetooth audio, and answers with Normal until then. The bridge logs that, shows what the amp really uses, and tries your choice again when Bluetooth audio connects or the source changes.
+
+## AUX priority
+
+```yaml
+switch:
+  - platform: wuzhi_amp
+    aux_priority:
+      name: AUX priority
+```
+
+Off by default, kept across reboots. Same rules as the PWA:
+
+- It only reacts to changes the amp reports: AUX cable plugged in, or the amp moving to Bluetooth or idle. Turning it on, or connecting, doesn't switch anything.
+- It switches to AUX only while a cable is in. It never disconnects the phone.
+- At most one switch every 2 s and 6 per minute, then it gives up for a minute. Each switch is checked again 2.5 s later, since a phone often pulls the amp back.
+- Picking Bluetooth in the source select pauses it; picking AUX resumes it. Reconnecting also resumes it.
 
 ## Options
 
@@ -82,7 +109,8 @@ Each connection gets exactly one auth attempt. The amp ignores a second challeng
 | `components/wuzhi_amp/wuzhi_protocol.*` | Protocol core in plain C++ (auth, frames, TargetInfo parser), a port of `src/protocol/` |
 | `components/wuzhi_amp/wuzhi_amp.*` | ESPHome glue on top of `ble_client` |
 | `components/wuzhi_amp/number.py` | Gain number entity |
-| `components/wuzhi_amp/select.py` | Source select |
+| `components/wuzhi_amp/select.py` | Source and EQ selects |
+| `components/wuzhi_amp/switch.py` | AUX priority switch |
 | `components/wuzhi_amp/binary_sensor.py` | AUX cable, Bluetooth audio, connected |
 | `tests/test_protocol.cpp` | Host tests for the protocol core |
 
@@ -277,7 +305,5 @@ They check the E1 vectors from `docs/PROTOCOL.md` section 4, the frame examples 
 
 ## Next steps
 
-In this order, each one tested on the amp before the next:
-
-1. EQ preset as a select.
-2. Optional AUX priority.
+- Test EQ and AUX priority on the amp.
+- Find the amp without a configured address, and a public firmware file (with and without the web page).

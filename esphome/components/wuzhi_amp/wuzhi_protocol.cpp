@@ -613,4 +613,23 @@ bool split_wuzhi(const Bytes &p, uint8_t &cmd, Bytes &data) {
   return true;
 }
 
+// -------------------------------------------------------------------- EQ ---
+
+const char *eq_name(uint8_t mode) {
+  static const char *const names[EQ_MODE_COUNT] = {"Normal", "Rock", "Pop", "Classical", "Jazz", "Country", "User"};
+  return mode < EQ_MODE_COUNT ? names[mode] : "unknown";
+}
+
+Bytes set_eq_payload(uint8_t mode, const int8_t gains[10]) {
+  if (mode >= EQ_MODE_COUNT) return Bytes{};
+  Bytes out{function_id::PUBLIC, 12, 0x04, mode};
+  for (int i = 0; i < 10; i++) {
+    int g = gains[i];
+    if (g > EQ_GAIN_LIMIT) g = EQ_GAIN_LIMIT;
+    if (g < -EQ_GAIN_LIMIT) g = -EQ_GAIN_LIMIT;
+    out.push_back(static_cast<uint8_t>(static_cast<int8_t>(g)));
+  }
+  return out;
+}
+
 }  // namespace wuzhi_proto

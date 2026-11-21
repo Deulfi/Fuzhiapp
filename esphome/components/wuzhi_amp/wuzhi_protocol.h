@@ -227,4 +227,17 @@ constexpr uint8_t SOURCE_PUSH = 0x21;
 // like splitWuzhi(p, false): the model reply's len is one too high.
 bool split_wuzhi(const Bytes &p, uint8_t &cmd, Bytes &data);
 
+// -------------------------------------------------------------------- EQ ---
+
+// EQ modes (attr 4), tested on the ZK-502MT (OPEN_QUESTIONS S7).
+constexpr uint8_t EQ_MODE_COUNT = 7;  // Normal, Rock, Pop, Classical, Jazz, Country, User
+constexpr uint8_t EQ_MODE_USER = 6;
+const char *eq_name(uint8_t mode);
+// User gain range, same as the PWA (EQ_GAIN_LIMIT in src/app/amp.ts).
+constexpr int EQ_GAIN_LIMIT = 12;
+
+// SetSysInfo payload for the EQ: ff 0c 04 mode g0..g9 (gains as signed bytes, clamped to
+// +-EQ_GAIN_LIMIT). Presets (0-5): the amp uses its own curve. Empty if mode is out of range.
+Bytes set_eq_payload(uint8_t mode, const int8_t gains[10]);
+
 }  // namespace wuzhi_proto

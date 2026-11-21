@@ -36,10 +36,22 @@ static const uint32_t GAIN_STEP_MS = 120;  // one step of 1 every 120 ms, like t
 // sensor is configured. Read-only.
 static const uint32_t TARGET_POLL_MS = 30000;
 static const char *const SOURCE_OPTIONS[] = {"Bluetooth", "AUX", "Idle"};
+static const uint32_t EQ_CHECK_MS = 3000;  // the amp answers an EQ write with a push of the EQ it uses
+// AUX priority timing, DEFAULT_TIMING in src/app/timing.ts
+static const uint32_t PRIORITY_GAP_MS = 2000;
+static const uint32_t PRIORITY_RECHECK_MS = 2500;
+static const uint8_t PRIORITY_MAX_PER_MINUTE = 6;
 
 void WuzhiAmp::setup() {
   this->publish_gain_();  // unknown until the amp reports it
   this->publish_connected_(false);
+#ifdef USE_SWITCH
+  if (this->aux_priority_switch_ != nullptr) {
+    auto initial = this->aux_priority_switch_->get_initial_state_with_restore_mode();
+    this->aux_priority_ = initial.has_value() && *initial;
+    this->aux_priority_switch_->publish_state(this->aux_priority_);
+  }
+#endif
 }
 
 void WuzhiAmp::dump_config() {
@@ -77,6 +89,13 @@ void WuzhiAmp::reset_link_() {
   this->source_in_flight_ = false;
   this->target_info_logged_ = false;
   this->next_target_poll_at_ = 0;
+  this->eq_mode_ = -1;
+  this->eq_sent_mode_ = -1;
+  this->eq_pending_mode_ = -1;
+  this->priority_suspended_ = false;
+  this->priority_gave_up_ = false;
+  this->priority_try_count_ = 0;
+  this->priority_recheck_at_ = 0;
   this->publish_connected_(false);
 }
 
@@ -220,6 +239,10 @@ void WuzhiAmp::loop() {
 
   if (this->link_ == Link::READY) {
     this->step_gain_();
+    if (this->priority_recheck_at_ != 0 && static_cast<int32_t>(now - this->priority_recheck_at_) >= 0) {
+      this->priority_recheck_at_ = 0;
+      this->enforce_priority_("still not on AUX");
+    }
     if (this->needs_target_poll_() && this->next_target_poll_at_ != 0 &&
         static_cast<int32_t>(now - this->next_target_poll_at_) >= 0) {
       this->next_target_poll_at_ = now + TARGET_POLL_MS;
@@ -322,6 +345,10 @@ bool WuzhiAmp::needs_sys_info_() const {
 #endif
 #ifdef USE_SELECT
   need |= this->source_select_ != nullptr;
+  need |= this->eq_select_ != nullptr;
+#endif
+#ifdef USE_SWITCH
+  need |= this->aux_priority_switch_ != nullptr;
 #endif
 #ifdef USE_BINARY_SENSOR
   need |= this->aux_cable_sensor_ != nullptr;
@@ -466,6 +493,7 @@ void WuzhiAmp::apply_sys_info_(const proto::SysInfo &s, const char *source) {
   }
   if (s.has_current_function) this->set_source_(proto::source_from_function(s.current_function), source);
   if (s.has_aux) this->set_aux_cable_(s.aux_inserted);
+  if (s.has_eq) this->apply_eq_(s.eq_mode, s.eq_gains);
   if (s.has_volume) {
     this->gain_current_ = s.volume;
     // While stepping, the step replies drive the state and only the end value is published.
@@ -543,8 +571,16 @@ void WuzhiAmp::apply_target_info_(const proto::TargetInfo &t) {
 void WuzhiAmp::set_source_(proto::Source s, const char *why) {
   if (s == this->source_) return;  // the amp repeats the 0x21 push 2-4 times
   ESP_LOGI(TAG, "Source: %s (%s)", proto::source_name(s), why);
+  const bool was_known = this->source_ != proto::Source::UNKNOWN;
   this->source_ = s;
   this->publish_source_();
+  // A source change often means Bluetooth audio started: worth another EQ try (E1).
+  if (this->eq_pending_mode_ >= 0) this->retry_eq_("source changed");
+  // AUX priority reacts to changes reported by the amp, not to the first read on connect.
+  if (was_known && strcmp(why, "push") == 0 &&
+      (s == proto::Source::BLUETOOTH || s == proto::Source::IDLE)) {
+    this->enforce_priority_(s == proto::Source::IDLE ? "amp went idle" : "Bluetooth took over");
+  }
   // A source change often means Bluetooth audio connected or dropped: re-read it.
   if (this->needs_target_poll_() && this->link_ == Link::READY) this->query_target_info_now_();
 }
@@ -565,7 +601,9 @@ void WuzhiAmp::set_aux_cable_(bool in) {
   int v = in ? 1 : 0;
   if (v == this->aux_cable_) return;
   ESP_LOGI(TAG, "AUX cable %s", in ? "plugged in" : "unplugged");
+  const bool was_known = this->aux_cable_ >= 0;
   this->aux_cable_ = v;
+  if (was_known && in) this->enforce_priority_("cable plugged in");
 #ifdef USE_BINARY_SENSOR
   if (this->aux_cable_sensor_ != nullptr) this->aux_cable_sensor_->publish_state(in);
 #endif
@@ -576,6 +614,7 @@ void WuzhiAmp::set_bt_audio_(bool on) {
   if (v == this->bt_audio_) return;
   ESP_LOGI(TAG, "Bluetooth audio %s", on ? "connected" : "not connected");
   this->bt_audio_ = v;
+  if (on && this->eq_pending_mode_ >= 0) this->retry_eq_("Bluetooth audio connected");
 #ifdef USE_BINARY_SENSOR
   if (this->bt_audio_sensor_ != nullptr) this->bt_audio_sensor_->publish_state(on);
 #endif
@@ -584,6 +623,11 @@ void WuzhiAmp::set_bt_audio_(bool on) {
 void WuzhiAmp::publish_connected_(bool on) {
 #ifdef USE_BINARY_SENSOR
   if (this->connected_sensor_ != nullptr) this->connected_sensor_->publish_state(on);
+  if (!on) {
+    // Amp state is unknown while not connected.
+    if (this->aux_cable_sensor_ != nullptr) this->aux_cable_sensor_->invalidate_state();
+    if (this->bt_audio_sensor_ != nullptr) this->bt_audio_sensor_->invalidate_state();
+  }
 #endif
 }
 
@@ -600,19 +644,29 @@ void WuzhiAmp::request_source(size_t index) {
     return;
   }
   const bool to_aux = index == 1;
+  // The user's own choice: Bluetooth pauses AUX priority, AUX resumes it (PWA pickSource).
+  if (this->aux_priority_ && this->priority_suspended_ != !to_aux) {
+    this->priority_suspended_ = !to_aux;
+    ESP_LOGI(TAG, "%s", to_aux ? "AUX priority active again" : "AUX priority paused (Bluetooth picked)");
+  }
   const proto::Source want = to_aux ? proto::Source::AUX : proto::Source::BLUETOOTH;
   // Switching to Bluetooth while on Bluetooth drops the phone's audio link (S4): skip it.
   if (want == this->source_) {
     this->publish_source_();
     return;
   }
+  this->switch_source_(to_aux, "selected");
+}
+
+void WuzhiAmp::switch_source_(bool to_aux, const char *why) {
   if (to_aux && this->aux_cable_ != 1) {
     // The amp ignores the switch without a cable (DECISIONS, "From the EQ test").
     ESP_LOGW(TAG, "No AUX cable plugged in; not switching");
     this->publish_source_();
     return;
   }
-  ESP_LOGI(TAG, "Switching to %s", SOURCE_OPTIONS[index]);
+  if (this->source_in_flight_) return;
+  ESP_LOGI(TAG, "Switching to %s (%s)", to_aux ? "AUX" : "Bluetooth", why);
   this->source_in_flight_ = true;
   bool sent = this->request_(proto::op::FUNCTION,
                              proto::function_payload(to_aux ? proto::function_id::AUX : proto::function_id::BLUETOOTH),
@@ -628,6 +682,127 @@ void WuzhiAmp::request_source(size_t index) {
     this->source_in_flight_ = false;
     this->publish_source_();
   }
+}
+
+// ---------------------------------------------------------------------- EQ ---
+
+void WuzhiAmp::apply_eq_(uint8_t mode, const int8_t gains[10]) {
+  memcpy(this->eq_gains_, gains, 10);
+  // The amp answers an EQ write with the EQ it actually uses; a different mode means refused (E1).
+  if (this->eq_sent_mode_ >= 0 && millis() - this->eq_sent_at_ >= EQ_CHECK_MS) this->eq_sent_mode_ = -1;  // stale
+  if (this->eq_sent_mode_ >= 0) {
+    if (mode != this->eq_sent_mode_) {
+      ESP_LOGW(TAG, "The amp refused EQ %s (stays on %s). After power-on it only accepts EQ once it has "
+                    "played Bluetooth audio; it will be retried then.",
+               proto::eq_name(this->eq_sent_mode_), proto::eq_name(mode));
+      this->eq_pending_mode_ = this->eq_sent_mode_;
+    } else {
+      ESP_LOGI(TAG, "EQ set to %s", proto::eq_name(mode));
+      this->eq_pending_mode_ = -1;
+    }
+    this->eq_sent_mode_ = -1;
+  }
+  if (mode != this->eq_mode_) {
+    this->eq_mode_ = mode;
+    this->publish_eq_();
+  }
+}
+
+void WuzhiAmp::publish_eq_() {
+#ifdef USE_SELECT
+  if (this->eq_select_ == nullptr || this->eq_mode_ < 0 || this->eq_mode_ >= proto::EQ_MODE_COUNT) return;
+  this->eq_select_->publish_state(static_cast<size_t>(this->eq_mode_));
+#endif
+}
+
+void WuzhiAmp::request_eq(size_t mode) {
+  if (mode >= proto::EQ_MODE_COUNT) return;
+  if (this->link_ != Link::READY || this->eq_mode_ < 0) {
+    ESP_LOGW(TAG, "EQ change ignored: amp not connected or EQ not known yet");
+    this->publish_eq_();
+    return;
+  }
+  if (static_cast<int>(mode) == this->eq_mode_ && this->eq_pending_mode_ < 0) {
+    this->publish_eq_();
+    return;
+  }
+  this->write_eq_(static_cast<uint8_t>(mode));
+}
+
+void WuzhiAmp::write_eq_(uint8_t mode) {
+  // Presets: the amp fills in its own curve. User: the last gains the amp reported.
+  proto::Bytes payload = proto::set_eq_payload(static_cast<uint8_t>(mode), this->eq_gains_);
+  ESP_LOGI(TAG, "EQ %s -> %s", proto::eq_name(this->eq_mode_), proto::eq_name(mode));
+  this->eq_sent_mode_ = static_cast<int>(mode);
+  this->eq_sent_at_ = millis();
+  this->eq_pending_mode_ = -1;
+  this->request_(proto::op::SET_SYS_INFO, payload, [this](const proto::Frame *reply) {
+    if (reply == nullptr || reply->status != 0) {
+      ESP_LOGW(TAG, "EQ write not confirmed");
+      this->eq_sent_mode_ = -1;
+    }
+    this->publish_eq_();  // the amp's push sets the real value
+  });
+}
+
+void WuzhiAmp::retry_eq_(const char *why) {
+  if (this->eq_pending_mode_ < 0) return;
+  if (this->eq_sent_mode_ >= 0 && millis() - this->eq_sent_at_ < EQ_CHECK_MS) return;  // a write is being checked
+  ESP_LOGI(TAG, "Retrying EQ %s (%s)", proto::eq_name(this->eq_pending_mode_), why);
+  int mode = this->eq_pending_mode_;
+  this->eq_pending_mode_ = -1;
+  this->write_eq_(static_cast<uint8_t>(mode));
+}
+
+// ----------------------------------------------------------- AUX priority ---
+
+void WuzhiAmp::set_aux_priority(bool on) {
+  this->aux_priority_ = on;
+  this->priority_suspended_ = false;
+  this->priority_gave_up_ = false;
+  this->priority_try_count_ = 0;
+  ESP_LOGI(TAG, "AUX priority %s", on ? "on" : "off");
+#ifdef USE_SWITCH
+  if (this->aux_priority_switch_ != nullptr) this->aux_priority_switch_->publish_state(on);
+#endif
+  // Turning it on doesn't switch by itself: it reacts to the next change (like the PWA).
+}
+
+// Switch back to AUX when the amp leaves it while a cable is in. A phone connecting often pulls
+// the amp back to Bluetooth a moment later, so every attempt is re-checked. At most one try per
+// 2 s and 6 per minute, so it can never loop fast. Never disconnects the phone.
+void WuzhiAmp::enforce_priority_(const char *why) {
+  if (!this->aux_priority_ || this->priority_suspended_ || this->link_ != Link::READY) return;
+  if (this->aux_cable_ != 1) return;
+  if (this->source_ != proto::Source::BLUETOOTH && this->source_ != proto::Source::IDLE) return;
+
+  const uint32_t now = millis();
+  // keep only tries from the last minute
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < this->priority_try_count_; i++) {
+    if (now - this->priority_tries_[i] < 60000) this->priority_tries_[n++] = this->priority_tries_[i];
+  }
+  this->priority_try_count_ = n;
+  if (n >= PRIORITY_MAX_PER_MINUTE) {
+    if (!this->priority_gave_up_) {
+      ESP_LOGW(TAG, "AUX priority: giving up for a minute (the amp keeps going back to Bluetooth)");
+    }
+    this->priority_gave_up_ = true;
+    this->priority_recheck_at_ = this->priority_tries_[0] + 60000;
+    if (this->priority_recheck_at_ == 0) this->priority_recheck_at_ = 1;
+    return;
+  }
+  if (n > 0 && now - this->priority_tries_[n - 1] < PRIORITY_GAP_MS) {
+    this->priority_recheck_at_ = this->priority_tries_[n - 1] + PRIORITY_GAP_MS;
+    if (this->priority_recheck_at_ == 0) this->priority_recheck_at_ = 1;
+    return;
+  }
+  this->priority_gave_up_ = false;
+  this->priority_tries_[this->priority_try_count_++] = now;
+  ESP_LOGI(TAG, "AUX priority: back to AUX (%s)", why);
+  this->switch_source_(true, "AUX priority");
+  this->priority_recheck_at_ = now + PRIORITY_RECHECK_MS;
+  if (this->priority_recheck_at_ == 0) this->priority_recheck_at_ = 1;
 }
 
 }  // namespace wuzhi_amp

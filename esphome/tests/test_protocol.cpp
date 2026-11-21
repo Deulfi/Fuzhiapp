@@ -274,7 +274,16 @@ static void test_source() {
   CHECK(!split_wuzhi(from_hex("aa 02 21 03"), cmd, data));
 }
 
+static void test_eq() {
+  int8_t g[10] = {0, 1, 2, 3, -3, 13, -13, 0, 0, 12};
+  CHECK_EQ_STR(to_hex(set_eq_payload(EQ_MODE_USER, g)), "ff 0c 04 06 00 01 02 03 fd 0c f4 00 00 0c");
+  CHECK(set_eq_payload(7, g).empty());
+  CHECK_EQ_STR(eq_name(0), "Normal");
+  CHECK_EQ_STR(eq_name(6), "User");
+}
+
 int main() {
+  test_eq();
   test_source();
   test_gain();
   test_sys_info();
