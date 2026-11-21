@@ -1,13 +1,13 @@
 # Public firmware for an ESP32-C3 Super Mini as a BLE bridge to a Wuzhi ZK-502MT amp.
 # No secrets: Wi-Fi is set up while flashing (web.esphome.io) or through the
-# "Wuzhi Amp Setup" hotspot, and Home Assistant sets the encryption key when it adopts
+# "Wuzhi Amp Bridge Setup" hotspot, and Home Assistant sets the encryption key when it adopts
 # the device. The amp is found automatically. See esphome/README.md.
 #
 # Lean variant: Home Assistant only, no web page. wuzhi-amp-web.yaml adds the web page.
 
 substitutions:
-  name: wuzhi-amp
-  friendly_name: Wuzhi Amp
+  name: wuzhi-amp-bridge
+  friendly_name: Wuzhi Amp Bridge
 
 esphome:
   name: ${name}
@@ -50,7 +50,7 @@ ota:
 
 wifi:
   ap:
-    ssid: "Wuzhi Amp Setup"
+    ssid: "Wuzhi Amp Bridge Setup"
 
 captive_portal:
 
@@ -73,6 +73,28 @@ number:
     gain:
       name: Gain
       max_gain: 40
+    beep_volume:
+      name: Beep volume
+    eq_31:
+      name: EQ 31 Hz
+    eq_63:
+      name: EQ 63 Hz
+    eq_125:
+      name: EQ 125 Hz
+    eq_250:
+      name: EQ 250 Hz
+    eq_500:
+      name: EQ 500 Hz
+    eq_1k:
+      name: EQ 1 kHz
+    eq_2k:
+      name: EQ 2 kHz
+    eq_4k:
+      name: EQ 4 kHz
+    eq_8k:
+      name: EQ 8 kHz
+    eq_16k:
+      name: EQ 16 kHz
 
 select:
   - platform: wuzhi_amp
@@ -94,8 +116,19 @@ switch:
   - platform: wuzhi_amp
     aux_priority:
       name: AUX priority
+    beep:
+      name: Beep
 
 button:
   - platform: wuzhi_amp
     forget_amp:
       name: Forget amp
+    disconnect_phone:
+      name: Disconnect phone audio
+
+text_sensor:
+  - platform: wuzhi_amp
+    firmware_version:
+      name: Amp firmware
+    protocol_version:
+      name: Amp protocol

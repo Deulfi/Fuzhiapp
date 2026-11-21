@@ -282,7 +282,23 @@ static void test_eq() {
   CHECK_EQ_STR(eq_name(6), "User");
 }
 
+static void test_wuzhi() {
+  CHECK_EQ_STR(to_hex(wuzhi_frame(wuzhi_cmd::MODEL_QUERY)), "aa 01 01 55");  // DEVICE_ID §2.3
+  CHECK_EQ_STR(to_hex(beep_set_frame(true, 10, 40)), "aa 03 02 01 0a 55");
+  CHECK(beep_set_frame(true, 31, 40).empty());  // above 30
+  CHECK(beep_set_frame(true, 21, 20).empty());  // above the gain cap
+  CHECK(!beep_set_frame(false, 0, 0).empty());
+  // model reply data, DEVICE_ID §2.3: "002" "010" "2203" 01 08 00 04 01 08
+  ModelInfo m;
+  CHECK(parse_model_reply(from_hex("30 30 32 30 31 30 32 32 30 33 01 08 00 04 01 08"), m));
+  CHECK_EQ_STR(m.product, "002");
+  CHECK_EQ_STR(m.build, "2203");
+  CHECK_EQ_STR(m.firmware(), "V002.10");
+  CHECK(!parse_model_reply(from_hex("30 30 32"), m));
+}
+
 int main() {
+  test_wuzhi();
   test_eq();
   test_source();
   test_gain();

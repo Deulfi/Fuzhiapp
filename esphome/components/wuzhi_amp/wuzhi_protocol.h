@@ -83,6 +83,8 @@ constexpr uint8_t SET_SYS_INFO = 0x08;
 constexpr uint8_t SYS_INFO_PUSH = 0x09;
 constexpr uint8_t FUNCTION = 0x0E;
 constexpr uint8_t CUSTOM = 0xFF;
+// SDK DisconnectClassicBluetooth, no params: drops the phone's audio link (tested in the PWA).
+constexpr uint8_t DISCONNECT_CLASSIC = 0x06;
 }  // namespace op
 
 Bytes encode_raw(uint8_t flags, uint8_t opcode, const Bytes &params);
@@ -220,8 +222,29 @@ constexpr uint8_t PUBLIC = 0xFF;
 Bytes function_payload(uint8_t fn);
 
 namespace wuzhi_cmd {
+constexpr uint8_t MODEL_QUERY = 0x01;  // AA 01 01 55 -> AA len 01 "002" "010" "2203" + 6 bytes
+constexpr uint8_t BEEP_SET = 0x02;     // AA 03 02 on vol 55; the amp pushes AA 02 02 80 55
+constexpr uint8_t BEEP_READ = 0x12;    // AA 01 12 55 -> AA 03 12 on vol 55
 constexpr uint8_t SOURCE_PUSH = 0x21;
 }  // namespace wuzhi_cmd
+
+// Wuzhi custom frame AA (n+1) cmd data(n) 55, sent inside opcode 0xFF.
+Bytes wuzhi_frame(uint8_t cmd, const Bytes &data = Bytes{});
+
+// Beep set frame. Beep volume uses the 0-30 scale and gets the same cap as gain (DECISIONS,
+// "Spec §12"). Empty if volume is out of range or above min(cap, 30).
+Bytes beep_set_frame(bool on, int volume, int cap);
+constexpr int BEEP_VOLUME_MAX = 30;
+
+struct ModelInfo {
+  std::string product;   // "002" on the ZK-502MT
+  std::string revision;  // "010"
+  std::string build;     // "2203", possibly a build date [I]
+  // "V" + product + "." + revision without leading zeros: "V002.10", as the vendor app shows it.
+  std::string firmware() const;
+};
+// Model query reply data (after AA len 01). False if shorter than 10 bytes.
+bool parse_model_reply(const Bytes &data, ModelInfo &out);
 
 // Split a Wuzhi custom frame AA len cmd data.. 55 (inside opcode 0xFF). Lenient about len,
 // like splitWuzhi(p, false): the model reply's len is one too high.

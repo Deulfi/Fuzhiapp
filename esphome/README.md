@@ -2,7 +2,7 @@
 
 An ESP32-C3 Super Mini running ESPHome holds the amp's Bluetooth LE control connection and makes the amp available to Home Assistant over Wi-Fi.
 
-Status: the board connects to a ZK-502MT, runs the 5-step authentication and logs the decoded GetTargetInfo (tested). Gain, source and the binary sensors work (tested). EQ and AUX priority are new and not yet tested on the amp.
+Status: the board connects to a ZK-502MT, runs the 5-step authentication and logs the decoded GetTargetInfo (tested). Gain, source and the binary sensors work (tested). EQ, AUX priority, automatic finding and the public firmware work (tested). Beep, EQ bands, disconnect phone audio and the info sensors are new and not yet tested on the amp.
 
 The amp accepts only one control connection. While the ESP32 is connected, the phone app (PWA or vendor app) cannot connect, and the other way round. Bluetooth audio from the phone is not affected.
 
@@ -16,6 +16,9 @@ The amp accepts only one control connection. While the ESP32 is connected, the p
 - With the Bluetooth audio sensor configured: a read-only GetTargetInfo every 30 s and after source changes (the amp has no push for it).
 - EQ writes only when you change the EQ select, or once more when the amp refused it (see below).
 - With AUX priority on: a switch to AUX when the amp leaves AUX while a cable is in (see below).
+- With beep entities: one read-only beep query after auth; beep writes only when you change them.
+- With the firmware sensor: one read-only model query after auth.
+- Disconnect phone audio only when you press the button.
 - Nothing else.
 
 ## Gain
@@ -68,6 +71,42 @@ binary_sensor:
 - The EQ only affects Bluetooth audio, not AUX.
 - After power-on the amp only accepts an EQ once it has played Bluetooth audio, and answers with Normal until then. The bridge logs that, shows what the amp really uses, and tries your choice again when Bluetooth audio connects or the source changes.
 
+## Beep, EQ bands, phone audio, info
+
+```yaml
+number:
+  - platform: wuzhi_amp
+    beep_volume:
+      name: Beep volume
+    eq_31:
+      name: EQ 31 Hz
+    # eq_63, eq_125, eq_250, eq_500, eq_1k, eq_2k, eq_4k, eq_8k, eq_16k the same way
+
+switch:
+  - platform: wuzhi_amp
+    beep:
+      name: Beep
+
+button:
+  - platform: wuzhi_amp
+    disconnect_phone:
+      name: Disconnect phone audio
+
+text_sensor:
+  - platform: wuzhi_amp
+    firmware_version:
+      name: Amp firmware
+    protocol_version:
+      name: Amp protocol
+```
+
+- Beep and beep volume: the amp's prompt tones. The volume uses the 0-30 scale and is capped by `max_gain`, like the gain.
+- EQ bands: the User EQ in dB, -12 to +12. They show the curve the amp reports, also for presets. Changing a band switches to User.
+- Disconnect phone audio: drops the phone's or computer's Bluetooth audio link. If the amp isn't on Bluetooth it switches there first, because the command only works there; with a cable in, the amp goes back to AUX by itself. The phone has to reconnect from its own Bluetooth menu.
+- Amp firmware: "V002.10" on the ZK-502MT, as the vendor app shows it. Amp protocol: the RCSP version, "2.1".
+
+Not in the bridge, on purpose: renaming the amp and the pairing code (both restart the amp), and the protocol logger (PWA only).
+
 ## AUX priority
 
 ```yaml
@@ -108,13 +147,14 @@ Each connection gets exactly one auth attempt. The amp ignores a second challeng
 | `firmware/wuzhi-amp-lean.yaml`, `firmware/wuzhi-amp-web.yaml` | Configs for the public firmware files, no secrets |
 | `../.github/workflows/esphome-firmware.yml` | Builds the firmware files; tags `esphome-v*` publish a release |
 | `secrets.example.yaml` | Template for `secrets.yaml` (Wi-Fi, API key) |
-| `components/wuzhi_amp/button.py` | Forget amp button |
+| `components/wuzhi_amp/button.py` | Forget amp, Disconnect phone audio buttons |
+| `components/wuzhi_amp/text_sensor.py` | Firmware and protocol version |
 | `components/wuzhi_amp/` | The external component |
 | `components/wuzhi_amp/wuzhi_protocol.*` | Protocol core in plain C++ (auth, frames, TargetInfo parser), a port of `src/protocol/` |
 | `components/wuzhi_amp/wuzhi_amp.*` | ESPHome glue on top of `ble_client` |
-| `components/wuzhi_amp/number.py` | Gain number entity |
+| `components/wuzhi_amp/number.py` | Gain, beep volume, EQ band numbers |
 | `components/wuzhi_amp/select.py` | Source and EQ selects |
-| `components/wuzhi_amp/switch.py` | AUX priority switch |
+| `components/wuzhi_amp/switch.py` | AUX priority, beep switches |
 | `components/wuzhi_amp/binary_sensor.py` | AUX cable, Bluetooth audio, connected |
 | `tests/test_protocol.cpp` | Host tests for the protocol core |
 
@@ -155,13 +195,13 @@ Two variants, built by GitHub Actions from `firmware/`:
 | File | Content |
 |---|---|
 | `wuzhi-amp-lean-factory.bin` | Home Assistant only. Least RAM. |
-| `wuzhi-amp-web-factory.bin` | Also a control page on the board (`http://wuzhi-amp-xxxxxx.local`), for use without Home Assistant. |
+| `wuzhi-amp-web-factory.bin` | Also a control page on the board (`http://wuzhi-amp-bridge-xxxxxx.local`), for use without Home Assistant. |
 
-Both contain gain, source, EQ, AUX cable, Bluetooth audio, amp connected, AUX priority and Forget amp. Nothing to configure: no Wi-Fi password or key in the file, and the amp is found by name.
+Both contain all entities described below. Nothing to configure: no Wi-Fi password or key in the file, and the amp is found by name.
 
 1. Download a `factory.bin` from the releases page (tags `esphome-v...`), or from the artifacts of the latest "ESPHome firmware" run under Actions.
 2. Plug the board into the PC, open https://web.esphome.io in Chrome or Edge, click Connect, pick the board's port, then Install and select the file. If no port shows up, hold BOOT while plugging the board in.
-3. After flashing, the same page offers to set up Wi-Fi ("Configure Wi-Fi"). If you skip that, the board opens a hotspot "Wuzhi Amp Setup"; join it and pick your network on the page that opens.
+3. After flashing, the same page offers to set up Wi-Fi ("Configure Wi-Fi"). If you skip that, the board opens a hotspot "Wuzhi Amp Bridge Setup"; join it and pick your network on the page that opens.
 4. Close the PWA and vendor app so the amp advertises. The board finds it within a few seconds.
 5. Home Assistant discovers the board (Settings, Devices and services). Adopting it sets the encryption key; no key needs to be typed.
 
@@ -288,7 +328,7 @@ A working connection looks like this (values from a ZK-502MT, private parts reda
 
 ### 6. Add it to Home Assistant (optional for now)
 
-Home Assistant usually discovers the board by itself: Settings, Devices and services, then configure the discovered "Wuzhi Amp" and enter the API key from `secrets.yaml`. There are no amp entities yet; this only checks that the link to Home Assistant works.
+Home Assistant usually discovers the board by itself: Settings, Devices and services, then configure the discovered "Wuzhi Amp Bridge" and enter the API key from `secrets.yaml`.
 
 ## Troubleshooting
 

@@ -8,7 +8,7 @@
 
 esphome:
   name: wuzhi-amp
-  friendly_name: Wuzhi Amp
+  friendly_name: Wuzhi Amp Bridge
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -78,6 +78,28 @@ number:
       # Highest value the bridge will ever send (0-40, default 40). The ZK-502MT uses
       # 0-30 and ignores 31-40.
       max_gain: 40
+    beep_volume:
+      name: Beep volume
+    eq_31:
+      name: EQ 31 Hz
+    eq_63:
+      name: EQ 63 Hz
+    eq_125:
+      name: EQ 125 Hz
+    eq_250:
+      name: EQ 250 Hz
+    eq_500:
+      name: EQ 500 Hz
+    eq_1k:
+      name: EQ 1 kHz
+    eq_2k:
+      name: EQ 2 kHz
+    eq_4k:
+      name: EQ 4 kHz
+    eq_8k:
+      name: EQ 8 kHz
+    eq_16k:
+      name: EQ 16 kHz
 
 select:
   - platform: wuzhi_amp
@@ -99,8 +121,19 @@ switch:
   - platform: wuzhi_amp
     aux_priority:
       name: AUX priority
+    beep:
+      name: Beep
 
 button:
   - platform: wuzhi_amp
     forget_amp:
       name: Forget amp
+    disconnect_phone:
+      name: Disconnect phone audio
+
+text_sensor:
+  - platform: wuzhi_amp
+    firmware_version:
+      name: Amp firmware
+    protocol_version:
+      name: Amp protocol

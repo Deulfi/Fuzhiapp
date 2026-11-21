@@ -116,6 +116,12 @@ void WuzhiAmp::reset_link_() {
   this->priority_gave_up_ = false;
   this->priority_try_count_ = 0;
   this->priority_recheck_at_ = 0;
+  this->beep_on_ = -1;
+  this->beep_volume_ = -1;
+  this->drop_ = Drop::IDLE;
+  this->drop_waiting_ = false;
+  this->publish_beep_();
+  this->publish_eq_bands_();
   this->publish_connected_(false);
 }
 
@@ -259,6 +265,7 @@ void WuzhiAmp::loop() {
 
   if (this->link_ == Link::READY) {
     this->step_gain_();
+    if (this->drop_ != Drop::IDLE) this->drop_phone_step_();
     if (this->priority_recheck_at_ != 0 && static_cast<int32_t>(now - this->priority_recheck_at_) >= 0) {
       this->priority_recheck_at_ = 0;
       this->enforce_priority_("still not on AUX");
@@ -355,6 +362,11 @@ void WuzhiAmp::on_authenticated_() {
   // Both reads are read-only. GetSysInfo only when an entity needs the amp's state.
   if (this->query_target_info_ || this->needs_target_poll_()) this->query_target_info_now_();
   if (this->needs_sys_info_()) this->query_sys_info_now_();
+  // Read-only Wuzhi queries; the answers come back as pushes.
+  if (this->needs_beep_()) this->query_wuzhi_(proto::wuzhi_cmd::BEEP_READ);
+#ifdef USE_TEXT_SENSOR
+  if (this->firmware_sensor_ != nullptr) this->query_wuzhi_(proto::wuzhi_cmd::MODEL_QUERY);
+#endif
   if (this->needs_target_poll_()) this->next_target_poll_at_ = millis() + TARGET_POLL_MS;
 }
 
@@ -373,15 +385,29 @@ bool WuzhiAmp::needs_sys_info_() const {
 #ifdef USE_BINARY_SENSOR
   need |= this->aux_cable_sensor_ != nullptr;
 #endif
+#ifdef USE_NUMBER
+  for (auto *n : this->eq_band_numbers_) need |= n != nullptr;
+#endif
   return need;
 }
 
 bool WuzhiAmp::needs_target_poll_() const {
+  bool need = false;
 #ifdef USE_BINARY_SENSOR
-  return this->bt_audio_sensor_ != nullptr;
-#else
-  return false;
+  need |= this->bt_audio_sensor_ != nullptr;
 #endif
+  return need;
+}
+
+bool WuzhiAmp::needs_beep_() const {
+  bool need = false;
+#ifdef USE_SWITCH
+  need |= this->beep_switch_ != nullptr;
+#endif
+#ifdef USE_NUMBER
+  need |= this->beep_volume_number_ != nullptr;
+#endif
+  return need;
 }
 
 void WuzhiAmp::on_notify_(const uint8_t *data, size_t len) {
@@ -425,9 +451,7 @@ void WuzhiAmp::on_frame_(const proto::Frame &f) {
   } else if (f.opcode == proto::op::CUSTOM) {
     uint8_t cmd;
     proto::Bytes data;
-    if (proto::split_wuzhi(f.payload, cmd, data) && cmd == proto::wuzhi_cmd::SOURCE_PUSH && data.size() == 1) {
-      this->set_source_(proto::source_from_push(data[0]), "push");
-    }
+    if (proto::split_wuzhi(f.payload, cmd, data)) this->on_wuzhi_push_(cmd, data);
   }
   if (f.expects_response) this->write_(proto::ack_for(f));  // bare ack (D6), as the PWA does
 }
@@ -463,17 +487,19 @@ bool WuzhiAmp::request_(uint8_t opcode, const proto::Bytes &payload, ReplyHandle
   return true;
 }
 
-void WuzhiAmp::query_target_info_now_() {
+void WuzhiAmp::query_target_info_now_(std::function<void()> then) {
   ESP_LOGD(TAG, "Sending GetTargetInfo");
-  this->request_(proto::op::GET_TARGET_INFO, proto::target_info_all_payload(), [this](const proto::Frame *reply) {
-    if (reply == nullptr) return;  // timeout already logged
-    if (reply->status != 0) {
-      ESP_LOGW(TAG, "GetTargetInfo: status 0x%02x", reply->status);
+  bool sent = this->request_(proto::op::GET_TARGET_INFO, proto::target_info_all_payload(),
+                             [this, then](const proto::Frame *reply) {
+    if (reply == nullptr || reply->status != 0) {
+      if (reply != nullptr) ESP_LOGW(TAG, "GetTargetInfo: status 0x%02x", reply->status);
+      if (then) then();
       return;
     }
     proto::TargetInfo info;
     if (!proto::parse_target_info(reply->payload, info)) {
       ESP_LOGW(TAG, "GetTargetInfo: bad TLV list (%u bytes)", static_cast<unsigned>(reply->payload.size()));
+      if (then) then();
       return;
     }
     if (!this->target_info_logged_) {
@@ -485,7 +511,9 @@ void WuzhiAmp::query_target_info_now_() {
       ESP_LOGD(TAG, "Target info: %s", proto::describe_target_info(info).c_str());
     }
     this->apply_target_info_(info);
+    if (then) then();
   });
+  if (!sent && then) then();
 }
 
 void WuzhiAmp::query_sys_info_now_() {
@@ -585,6 +613,16 @@ void WuzhiAmp::step_gain_() {
 
 void WuzhiAmp::apply_target_info_(const proto::TargetInfo &t) {
   if (t.has_edr) this->set_bt_audio_(t.edr_status == 1);
+#ifdef USE_TEXT_SENSOR
+  if (t.has_protocol_version && this->protocol_sensor_ != nullptr) {
+    char b[8];
+    snprintf(b, sizeof b, "%u.%u", t.protocol_version >> 4, t.protocol_version & 0x0f);
+    if (this->protocol_published_ != b) {
+      this->protocol_published_ = b;
+      this->protocol_sensor_->publish_state(b);
+    }
+  }
+#endif
   if (t.has_current_function) this->set_source_(proto::source_from_function(t.current_function), "target info");
 }
 
@@ -708,7 +746,9 @@ void WuzhiAmp::switch_source_(bool to_aux, const char *why) {
 // ---------------------------------------------------------------------- EQ ---
 
 void WuzhiAmp::apply_eq_(uint8_t mode, const int8_t gains[10]) {
+  const bool gains_changed = memcmp(this->eq_gains_, gains, 10) != 0 || this->eq_mode_ < 0;
   memcpy(this->eq_gains_, gains, 10);
+  if (gains_changed) this->publish_eq_bands_();
   // The amp answers an EQ write with the EQ it actually uses; a different mode means refused (E1).
   if (this->eq_sent_mode_ >= 0 && millis() - this->eq_sent_at_ >= EQ_CHECK_MS) this->eq_sent_mode_ = -1;  // stale
   if (this->eq_sent_mode_ >= 0) {
@@ -717,6 +757,7 @@ void WuzhiAmp::apply_eq_(uint8_t mode, const int8_t gains[10]) {
                     "played Bluetooth audio; it will be retried then.",
                proto::eq_name(this->eq_sent_mode_), proto::eq_name(mode));
       this->eq_pending_mode_ = this->eq_sent_mode_;
+      memcpy(this->eq_pending_gains_, this->eq_sent_gains_, 10);
     } else {
       ESP_LOGI(TAG, "EQ set to %s", proto::eq_name(mode));
       this->eq_pending_mode_ = -1;
@@ -747,13 +788,14 @@ void WuzhiAmp::request_eq(size_t mode) {
     this->publish_eq_();
     return;
   }
-  this->write_eq_(static_cast<uint8_t>(mode));
+  // Presets: the amp fills in its own curve. User: the last gains the amp reported.
+  this->write_eq_(static_cast<uint8_t>(mode), this->eq_gains_);
 }
 
-void WuzhiAmp::write_eq_(uint8_t mode) {
-  // Presets: the amp fills in its own curve. User: the last gains the amp reported.
-  proto::Bytes payload = proto::set_eq_payload(static_cast<uint8_t>(mode), this->eq_gains_);
+void WuzhiAmp::write_eq_(uint8_t mode, const int8_t gains[10]) {
+  proto::Bytes payload = proto::set_eq_payload(static_cast<uint8_t>(mode), gains);
   ESP_LOGI(TAG, "EQ %s -> %s", proto::eq_name(this->eq_mode_), proto::eq_name(mode));
+  memcpy(this->eq_sent_gains_, gains, 10);
   this->eq_sent_mode_ = static_cast<int>(mode);
   this->eq_sent_at_ = millis();
   this->eq_pending_mode_ = -1;
@@ -771,8 +813,10 @@ void WuzhiAmp::retry_eq_(const char *why) {
   if (this->eq_sent_mode_ >= 0 && millis() - this->eq_sent_at_ < EQ_CHECK_MS) return;  // a write is being checked
   ESP_LOGI(TAG, "Retrying EQ %s (%s)", proto::eq_name(this->eq_pending_mode_), why);
   int mode = this->eq_pending_mode_;
+  int8_t gains[10];
+  memcpy(gains, this->eq_pending_gains_, 10);
   this->eq_pending_mode_ = -1;
-  this->write_eq_(static_cast<uint8_t>(mode));
+  this->write_eq_(static_cast<uint8_t>(mode), gains);
 }
 
 // ----------------------------------------------------------- AUX priority ---
@@ -873,6 +917,182 @@ void WuzhiAmp::forget_amp() {
     this->parent()->disconnect();
   }
   this->parent()->set_address(0);
+}
+
+void WuzhiAmp::publish_eq_bands_() {
+#ifdef USE_NUMBER
+  for (int i = 0; i < 10; i++) {
+    if (this->eq_band_numbers_[i] == nullptr) continue;
+    this->eq_band_numbers_[i]->publish_state(this->eq_mode_ < 0 && this->link_ != Link::READY
+                                                 ? NAN
+                                                 : static_cast<float>(this->eq_gains_[i]));
+  }
+#endif
+}
+
+void WuzhiAmp::request_eq_band(int band, float db) {
+  if (band < 0 || band > 9 || std::isnan(db)) return;
+  if (this->link_ != Link::READY || this->eq_mode_ < 0) {
+    ESP_LOGW(TAG, "EQ change ignored: amp not connected or EQ not known yet");
+    this->publish_eq_bands_();
+    return;
+  }
+  int v = static_cast<int>(std::lround(db));
+  if (v > proto::EQ_GAIN_LIMIT) v = proto::EQ_GAIN_LIMIT;
+  if (v < -proto::EQ_GAIN_LIMIT) v = -proto::EQ_GAIN_LIMIT;
+  int8_t gains[10];
+  memcpy(gains, this->eq_gains_, 10);
+  gains[band] = static_cast<int8_t>(v);
+  // Band gains only apply to the User EQ; changing one switches to it (as in the PWA).
+  this->write_eq_(proto::EQ_MODE_USER, gains);
+}
+
+// ------------------------------------------------------------------- beep ---
+
+void WuzhiAmp::query_wuzhi_(uint8_t cmd) {
+  this->request_(proto::op::CUSTOM, proto::wuzhi_frame(cmd), [cmd](const proto::Frame *reply) {
+    if (reply != nullptr && reply->status != 0) ESP_LOGW(TAG, "Wuzhi query 0x%02x: status 0x%02x", cmd, reply->status);
+  });
+}
+
+void WuzhiAmp::on_wuzhi_push_(uint8_t cmd, const proto::Bytes &data) {
+  if (cmd == proto::wuzhi_cmd::SOURCE_PUSH && data.size() == 1) {
+    this->set_source_(proto::source_from_push(data[0]), "push");
+  } else if (cmd == proto::wuzhi_cmd::BEEP_READ && data.size() == 2) {
+    this->beep_on_ = data[0] ? 1 : 0;
+    this->beep_volume_ = data[1];
+    ESP_LOGI(TAG, "Beep %s, volume %d", this->beep_on_ ? "on" : "off", this->beep_volume_);
+    this->publish_beep_();
+  } else if (cmd == proto::wuzhi_cmd::MODEL_QUERY) {
+    proto::ModelInfo m;
+    if (proto::parse_model_reply(data, m)) {
+      ESP_LOGI(TAG, "Model: product %s, firmware %s, build %s", m.product.c_str(), m.firmware().c_str(),
+               m.build.c_str());
+#ifdef USE_TEXT_SENSOR
+      if (this->firmware_sensor_ != nullptr) this->firmware_sensor_->publish_state(m.firmware());
+#endif
+    }
+  }
+}
+
+void WuzhiAmp::publish_beep_() {
+#ifdef USE_SWITCH
+  if (this->beep_switch_ != nullptr && this->beep_on_ >= 0) this->beep_switch_->publish_state(this->beep_on_ == 1);
+#endif
+#ifdef USE_NUMBER
+  if (this->beep_volume_number_ != nullptr) {
+    this->beep_volume_number_->publish_state(this->beep_volume_ < 0 ? NAN : static_cast<float>(this->beep_volume_));
+  }
+#endif
+}
+
+void WuzhiAmp::request_beep(int on, int volume) {
+  if (this->link_ != Link::READY || this->beep_on_ < 0 || this->beep_volume_ < 0) {
+    ESP_LOGW(TAG, "Beep change ignored: amp not connected or beep not known yet");
+    this->publish_beep_();
+    return;
+  }
+  const int new_on = on < 0 ? this->beep_on_ : on;
+  int new_vol = volume < 0 ? this->beep_volume_ : volume;
+  const int limit = std::min(this->max_gain_, proto::BEEP_VOLUME_MAX);
+  if (new_vol > limit) {
+    ESP_LOGW(TAG, "Beep volume %d is above the limit %d, using %d", new_vol, limit, limit);
+    new_vol = limit;
+  }
+  proto::Bytes frame = proto::beep_set_frame(new_on == 1, new_vol, this->max_gain_);
+  if (frame.empty()) {
+    this->publish_beep_();
+    return;
+  }
+  ESP_LOGI(TAG, "Beep %s, volume %d", new_on ? "on" : "off", new_vol);
+  this->request_(proto::op::CUSTOM, frame, [this, new_on, new_vol](const proto::Frame *reply) {
+    if (reply != nullptr && reply->status == 0) {
+      // The amp only acknowledges (AA 02 02 80 55); take the values as sent, like the PWA.
+      this->beep_on_ = new_on;
+      this->beep_volume_ = new_vol;
+    } else {
+      ESP_LOGW(TAG, "Beep change not confirmed");
+    }
+    this->publish_beep_();
+  });
+}
+
+// -------------------------------------------------- disconnect phone audio ---
+// Port of dropPhone() in src/app/amp.ts: re-read Bluetooth audio; if a phone is connected
+// and the amp isn't on Bluetooth, switch to Bluetooth first (the command only works there);
+// send opcode 0x06; then check up to 4 times, 750 ms apart. The amp returns to AUX by itself
+// if a cable is in, and AUX priority gets a chance afterwards.
+
+void WuzhiAmp::disconnect_phone() {
+  if (this->link_ != Link::READY || this->drop_ != Drop::IDLE) {
+    ESP_LOGW(TAG, "Disconnect phone audio ignored: amp not connected or already running");
+    return;
+  }
+  this->drop_ = Drop::READ;
+  this->drop_waiting_ = true;
+  this->query_target_info_now_([this]() { this->drop_waiting_ = false; });
+}
+
+void WuzhiAmp::drop_phone_step_() {
+  if (this->drop_waiting_) return;
+  const uint32_t now = millis();
+  switch (this->drop_) {
+    case Drop::READ:
+      if (this->bt_audio_ != 1) {
+        ESP_LOGW(TAG, "No phone or computer is connected for audio");
+        this->drop_ = Drop::IDLE;
+        return;
+      }
+      if (this->source_ != proto::Source::BLUETOOTH) {
+        this->switch_source_(false, "to disconnect the phone");
+        this->drop_ = Drop::TO_BLUETOOTH;
+        this->drop_deadline_ = now + 2000;
+        return;
+      }
+      this->drop_ = Drop::SEND;
+      return;
+    case Drop::TO_BLUETOOTH:
+      if (this->source_ == proto::Source::BLUETOOTH || static_cast<int32_t>(now - this->drop_deadline_) >= 0) {
+        this->drop_ = Drop::SEND;
+      }
+      return;
+    case Drop::SEND:
+      ESP_LOGI(TAG, "Disconnecting Bluetooth audio");
+      this->drop_ = Drop::VERIFY;
+      this->drop_checks_ = 0;
+      this->drop_waiting_ = true;
+      if (!this->request_(proto::op::DISCONNECT_CLASSIC, proto::Bytes{}, [this](const proto::Frame *reply) {
+            this->drop_waiting_ = false;
+            this->drop_deadline_ = millis() + 750;
+            if (reply == nullptr || reply->status != 0) ESP_LOGW(TAG, "Disconnect command not confirmed");
+          })) {
+        this->drop_ = Drop::IDLE;
+        this->drop_waiting_ = false;
+      }
+      return;
+    case Drop::VERIFY:
+      if (static_cast<int32_t>(now - this->drop_deadline_) < 0) return;
+      if (this->bt_audio_ == 0) {
+        ESP_LOGI(TAG, "Bluetooth audio disconnected");
+        this->drop_ = Drop::IDLE;
+        this->enforce_priority_("after disconnecting the phone");
+        return;
+      }
+      if (this->drop_checks_ >= 4) {
+        ESP_LOGW(TAG, "Asked the amp to disconnect Bluetooth audio, but it is still connected");
+        this->drop_ = Drop::IDLE;
+        return;
+      }
+      this->drop_checks_++;
+      this->drop_waiting_ = true;
+      this->query_target_info_now_([this]() {
+        this->drop_waiting_ = false;
+        this->drop_deadline_ = millis() + 750;
+      });
+      return;
+    default:
+      return;
+  }
 }
 
 }  // namespace wuzhi_amp

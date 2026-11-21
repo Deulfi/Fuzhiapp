@@ -26,6 +26,9 @@
 #ifdef USE_BUTTON
 #include "esphome/components/button/button.h"
 #endif
+#ifdef USE_TEXT_SENSOR
+#include "esphome/components/text_sensor/text_sensor.h"
+#endif
 
 #include "wuzhi_protocol.h"
 
@@ -84,6 +87,24 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
   void set_aux_priority_switch(switch_::Switch *s) { this->aux_priority_switch_ = s; }
 #endif
   void set_aux_priority(bool on);
+
+  // beep (Wuzhi custom 0x02 / 0x12)
+#ifdef USE_SWITCH
+  void set_beep_switch(switch_::Switch *s) { this->beep_switch_ = s; }
+#endif
+#ifdef USE_NUMBER
+  void set_beep_volume_number(number::Number *n) { this->beep_volume_number_ = n; }
+  void set_eq_band_number(int band, number::Number *n) { this->eq_band_numbers_[band] = n; }
+#endif
+  void request_beep(int on, int volume);  // -1 = keep the current value
+  // EQ band 0-9 (31 Hz .. 16 kHz) in dB: switches to the User EQ with that band changed.
+  void request_eq_band(int band, float db);
+  // "Disconnect phone audio": drops the phone's or computer's Bluetooth audio link.
+  void disconnect_phone();
+#ifdef USE_TEXT_SENSOR
+  void set_firmware_sensor(text_sensor::TextSensor *s) { this->firmware_sensor_ = s; }
+  void set_protocol_sensor(text_sensor::TextSensor *s) { this->protocol_sensor_ = s; }
+#endif
   // From the gain number (Home Assistant, web page). Steps toward the value, capped.
   void request_gain(float value);
 
@@ -113,7 +134,8 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
   bool request_(uint8_t opcode, const wuzhi_proto::Bytes &payload, ReplyHandler handler,
                 uint32_t timeout_ms = 2000);
 
-  void query_target_info_now_();
+  // then: called after the reply has been applied (or on timeout/error)
+  void query_target_info_now_(std::function<void()> then = nullptr);
   void query_sys_info_now_();
   void apply_sys_info_(const wuzhi_proto::SysInfo &s, const char *source);
   void step_gain_();
@@ -128,7 +150,13 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
   bool needs_target_poll_() const;
   void switch_source_(bool to_aux, const char *why);
   void publish_eq_();
-  void write_eq_(uint8_t mode);
+  void write_eq_(uint8_t mode, const int8_t gains[10]);
+  void publish_eq_bands_();
+  void publish_beep_();
+  void on_wuzhi_push_(uint8_t cmd, const wuzhi_proto::Bytes &data);
+  void query_wuzhi_(uint8_t cmd);
+  void drop_phone_step_();
+  bool needs_beep_() const;
   void apply_eq_(uint8_t mode, const int8_t gains[10]);
   void retry_eq_(const char *why);
   void enforce_priority_(const char *why);
@@ -196,6 +224,34 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
   int eq_sent_mode_{-1};
   uint32_t eq_sent_at_{0};
   int eq_pending_mode_{-1};  // refused after power-on (E1), retried when Bluetooth audio starts
+  int8_t eq_sent_gains_[10]{};
+  int8_t eq_pending_gains_[10]{};
+#ifdef USE_NUMBER
+  number::Number *eq_band_numbers_[10]{};
+#endif
+
+  // beep
+#ifdef USE_SWITCH
+  switch_::Switch *beep_switch_{nullptr};
+#endif
+#ifdef USE_NUMBER
+  number::Number *beep_volume_number_{nullptr};
+#endif
+  int beep_on_{-1};
+  int beep_volume_{-1};
+
+  // disconnect phone audio (PWA dropPhone), a small state machine run from loop()
+  enum class Drop : uint8_t { IDLE, READ, TO_BLUETOOTH, SEND, VERIFY };
+  Drop drop_{Drop::IDLE};
+  uint32_t drop_deadline_{0};
+  uint8_t drop_checks_{0};
+  bool drop_waiting_{false};
+
+#ifdef USE_TEXT_SENSOR
+  text_sensor::TextSensor *firmware_sensor_{nullptr};
+  text_sensor::TextSensor *protocol_sensor_{nullptr};
+#endif
+  std::string protocol_published_;
 
   // AUX priority (PWA amp.ts enforcePriority): reacts to changes only, never on connect.
 #ifdef USE_SWITCH
@@ -220,6 +276,36 @@ class SourceSelect : public select::Select, public Parented<WuzhiAmp> {
 class EqSelect : public select::Select, public Parented<WuzhiAmp> {
  protected:
   void control(size_t index) override { this->parent_->request_eq(index); }
+};
+#endif
+
+#ifdef USE_SWITCH
+class BeepSwitch : public switch_::Switch, public Parented<WuzhiAmp> {
+ protected:
+  void write_state(bool state) override { this->parent_->request_beep(state ? 1 : 0, -1); }
+};
+#endif
+
+#ifdef USE_NUMBER
+class BeepVolumeNumber : public number::Number, public Parented<WuzhiAmp> {
+ protected:
+  void control(float value) override { this->parent_->request_beep(-1, static_cast<int>(value)); }
+};
+
+class EqBandNumber : public number::Number, public Parented<WuzhiAmp> {
+ public:
+  void set_band(int band) { this->band_ = band; }
+
+ protected:
+  void control(float value) override { this->parent_->request_eq_band(this->band_, value); }
+  int band_{0};
+};
+#endif
+
+#ifdef USE_BUTTON
+class DisconnectPhoneButton : public button::Button, public Parented<WuzhiAmp> {
+ protected:
+  void press_action() override { this->parent_->disconnect_phone(); }
 };
 #endif
 

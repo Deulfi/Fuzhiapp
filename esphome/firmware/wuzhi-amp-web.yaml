@@ -1,5 +1,5 @@
 # Public firmware, web variant: everything in wuzhi-amp-lean.yaml plus a control page
-# on the board itself (http://wuzhi-amp-xxxxxx.local), usable without Home Assistant.
+# on the board itself (http://wuzhi-amp-bridge-xxxxxx.local), usable without Home Assistant.
 # Uses more RAM than the lean variant.
 
 packages:

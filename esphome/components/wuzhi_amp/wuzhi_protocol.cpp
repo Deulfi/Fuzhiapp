@@ -606,6 +606,39 @@ Source source_from_push(uint8_t v) {
 
 Bytes function_payload(uint8_t fn) { return Bytes{function_id::PUBLIC, fn}; }
 
+Bytes wuzhi_frame(uint8_t cmd, const Bytes &data) {
+  Bytes out{0xAA, static_cast<uint8_t>(data.size() + 1), cmd};
+  out.insert(out.end(), data.begin(), data.end());
+  out.push_back(0x55);
+  return out;
+}
+
+Bytes beep_set_frame(bool on, int volume, int cap) {
+  int limit = cap < BEEP_VOLUME_MAX ? cap : BEEP_VOLUME_MAX;
+  if (volume < 0 || volume > limit) return Bytes{};
+  return wuzhi_frame(wuzhi_cmd::BEEP_SET, Bytes{static_cast<uint8_t>(on ? 1 : 0), static_cast<uint8_t>(volume)});
+}
+
+static std::string printable(const Bytes &d, size_t from, size_t n) {
+  std::string out;
+  for (size_t i = from; i < from + n && i < d.size(); i++) out.push_back(d[i] >= 0x20 && d[i] < 0x7f ? char(d[i]) : '.');
+  return out;
+}
+
+bool parse_model_reply(const Bytes &d, ModelInfo &m) {
+  if (d.size() < 10) return false;
+  m.product = printable(d, 0, 3);
+  m.revision = printable(d, 3, 3);
+  m.build = printable(d, 6, 4);
+  return true;
+}
+
+std::string ModelInfo::firmware() const {
+  size_t i = 0;
+  while (i + 1 < revision.size() && revision[i] == '0') i++;
+  return "V" + product + "." + revision.substr(i);
+}
+
 bool split_wuzhi(const Bytes &p, uint8_t &cmd, Bytes &data) {
   if (p.size() < 4 || p[0] != 0xAA || p.back() != 0x55) return false;
   cmd = p[2];
