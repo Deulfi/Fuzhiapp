@@ -77,3 +77,8 @@ wuzhi_amp:
   query_target_info: true
   # Log the amp's Bluetooth address and ID string unredacted (default false).
   log_private: false
+  # Wait between enabling notifications and sending the auth challenge (default 1s).
+  auth_delay: 1s
+  # Pair with the amp and encrypt the link before auth (default true). Probably needed on the
+  # ZK-502MT: an unpaired PC gets no auth reply either (not yet confirmed with the ESP32).
+  pair: true

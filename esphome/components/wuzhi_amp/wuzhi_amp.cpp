@@ -27,6 +27,7 @@ static const uint32_t AUTH_STEP_TIMEOUT_MS = 2000;  // spec §4: 2 s per step
 // (OPEN_QUESTIONS T7). So: one attempt per connection, then reconnect.
 static const uint8_t AUTH_MAX_ATTEMPTS = 1;
 static const uint32_t CCCD_FALLBACK_MS = 1000;
+static const uint32_t PAIR_TIMEOUT_MS = 15000;
 
 void WuzhiAmp::setup() {}
 
@@ -35,6 +36,7 @@ void WuzhiAmp::dump_config() {
   ESP_LOGCONFIG(TAG, "  Query target info on connect: %s", YESNO(this->query_target_info_));
   ESP_LOGCONFIG(TAG, "  Log private identifiers: %s", YESNO(this->log_private_));
   ESP_LOGCONFIG(TAG, "  Auth delay: %u ms", this->auth_delay_ms_);
+  ESP_LOGCONFIG(TAG, "  Pair: %s", YESNO(this->pair_));
 }
 
 void WuzhiAmp::reset_link_() {
@@ -46,6 +48,7 @@ void WuzhiAmp::reset_link_() {
   this->auth_step_deadline_ = 0;
   this->cccd_fallback_at_ = 0;
   this->auth_start_at_ = 0;
+  this->pair_deadline_ = 0;
   this->reassembler_.reset();
   this->sn_ = 0;
   this->pending_.clear();
@@ -80,15 +83,22 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
                wr->properties, nt->handle, nt->properties);
       // ble_client marks every node ESTABLISHED at SEARCH_CMPL and then frees its GATT cache once
       // all nodes are established and no counted notify registration is pending. The CCCD lookup
-      // needs that cache, so: stay CONNECTED until notifications are on, and register through
-      // the client so the registration is counted.
+      // needs that cache, so: stay CONNECTED until notifications are on.
       this->node_state = espbt::ClientState::CONNECTED;
-      auto err = this->parent()->register_for_notify(nt->handle);
-      if (err != ESP_OK) {
-        ESP_LOGE(TAG, "register_for_notify failed: %d", err);
+      if (this->pair_) {
+        // The amp ignores AE01 writes on an unencrypted link (an unpaired PC gets no auth reply
+        // either). Encrypt first; with a stored bond this just resumes encryption.
+        ESP_LOGI(TAG, "Pairing / encrypting the link");
+        this->link_ = Link::PAIRING;
+        this->pair_deadline_ = millis() + PAIR_TIMEOUT_MS;
+        auto err = this->parent()->pair();
+        if (err != ESP_OK) {
+          ESP_LOGE(TAG, "Starting encryption failed: %d", err);
+          this->parent()->disconnect();
+        }
         break;
       }
-      this->link_ = Link::DISCOVERED;
+      this->enable_notifications_();
       break;
     }
 
@@ -129,8 +139,38 @@ void WuzhiAmp::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
   }
 }
 
+void WuzhiAmp::enable_notifications_() {
+  // Registered through the client so the registration is counted and the GATT cache kept.
+  auto err = this->parent()->register_for_notify(this->notify_handle_);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "register_for_notify failed: %d", err);
+    return;
+  }
+  this->link_ = Link::DISCOVERED;
+}
+
+void WuzhiAmp::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+  if (event != ESP_GAP_BLE_AUTH_CMPL_EVT || this->link_ != Link::PAIRING) return;
+  if (memcmp(param->ble_security.auth_cmpl.bd_addr, this->parent()->get_remote_bda(), 6) != 0) return;
+  this->pair_deadline_ = 0;
+  if (!param->ble_security.auth_cmpl.success) {
+    ESP_LOGE(TAG, "Pairing failed, reason 0x%02x. Disconnecting.", param->ble_security.auth_cmpl.fail_reason);
+    this->parent()->disconnect();
+    return;
+  }
+  ESP_LOGI(TAG, "Link encrypted (auth mode %d)", param->ble_security.auth_cmpl.auth_mode);
+  this->enable_notifications_();
+}
+
 void WuzhiAmp::loop() {
   const uint32_t now = millis();
+
+  if (this->link_ == Link::PAIRING && this->pair_deadline_ != 0 &&
+      static_cast<int32_t>(now - this->pair_deadline_) >= 0) {
+    ESP_LOGE(TAG, "Pairing timed out, disconnecting");
+    this->pair_deadline_ = 0;
+    this->parent()->disconnect();
+  }
 
   if (this->link_ == Link::DISCOVERED && this->cccd_fallback_at_ != 0 &&
       static_cast<int32_t>(now - this->cccd_fallback_at_) >= 0) {

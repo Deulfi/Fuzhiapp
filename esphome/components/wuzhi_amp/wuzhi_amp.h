@@ -27,15 +27,17 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
 
   void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                            esp_ble_gattc_cb_param_t *param) override;
+  void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) override;
 
   void set_log_private(bool v) { this->log_private_ = v; }
   void set_query_target_info(bool v) { this->query_target_info_ = v; }
   void set_auth_delay(uint32_t ms) { this->auth_delay_ms_ = ms; }
+  void set_pair(bool v) { this->pair_ = v; }
 
   bool is_ready() const { return this->link_ == Link::READY; }
 
  protected:
-  enum class Link { DISCONNECTED, DISCOVERED, AUTHENTICATING, READY };
+  enum class Link { DISCONNECTED, PAIRING, DISCOVERED, AUTHENTICATING, READY };
 
   using ReplyHandler = std::function<void(const wuzhi_proto::Frame *reply)>;  // nullptr = timeout
   struct Pending {
@@ -46,6 +48,7 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   };
 
   void reset_link_();
+  void enable_notifications_();
   void schedule_auth_();
   void start_auth_();
   void handle_auth_step_(const wuzhi_proto::AuthSession::Step &step);
@@ -70,6 +73,8 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   uint32_t cccd_fallback_at_{0};
   uint32_t auth_start_at_{0};
   uint32_t auth_delay_ms_{1000};
+  uint32_t pair_deadline_{0};
+  bool pair_{true};
 
   wuzhi_proto::FrameReassembler reassembler_;
   uint8_t sn_{0};
