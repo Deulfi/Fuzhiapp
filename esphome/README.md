@@ -91,6 +91,7 @@ wuzhi_amp:
   ble_client_id: amp_ble
   query_target_info: true   # read-only GetTargetInfo after auth
   log_private: false        # show address and ID string in the log
+  name_prefix: wuzhi        # BLE name prefix for finding the amp
   auth_delay: 1s            # wait between enabling notifications and the auth challenge
   pair: false               # BLE pairing (encryption) before auth
 ```
@@ -104,7 +105,8 @@ Each connection gets exactly one auth attempt. The amp ignores a second challeng
 | Path | Content |
 |---|---|
 | `wuzhi-amp.yaml` | ESPHome config for the ESP32-C3 Super Mini |
-| `secrets.example.yaml` | Template for `secrets.yaml` (Wi-Fi, API key, amp address) |
+| `secrets.example.yaml` | Template for `secrets.yaml` (Wi-Fi, API key) |
+| `components/wuzhi_amp/button.py` | Forget amp button |
 | `components/wuzhi_amp/` | The external component |
 | `components/wuzhi_amp/wuzhi_protocol.*` | Protocol core in plain C++ (auth, frames, TargetInfo parser), a port of `src/protocol/` |
 | `components/wuzhi_amp/wuzhi_amp.*` | ESPHome glue on top of `ble_client` |
@@ -118,12 +120,20 @@ Each connection gets exactly one auth attempt. The amp ignores a second challeng
 
 The amp's Bluetooth address and the serial-like ID string in GetTargetInfo type 3 are redacted in the log by default. `log_private: true` shows them, and also logs raw received frames at VERBOSE level. Leave it off unless you need it, and don't post such logs.
 
-Two things are outside the component and do show the address:
+ESPHome's own `ble_client` and `esp32_ble_tracker` log lines show the address; that is outside the component. Redact it before sharing any log. The automatically found address is stored on the board, not in any file.
 
-- ESPHome's own `ble_client` and `esp32_ble_tracker` log lines.
-- The `find_amp` helper in `wuzhi-amp.yaml`, which exists to show you the address once.
+## Finding the amp
 
-Redact the address before sharing any log. `secrets.yaml` holds the address and is git-ignored.
+With `mac_address: "00:00:00:00:00:00"` in `ble_client` (the default in `wuzhi-amp.yaml`), the bridge adopts the first device whose BLE name starts with `name_prefix` (default `wuzhi`, any case), stores it on the board and from then on connects only to that amp. The amp only advertises while nothing else holds its control connection, so close the PWA or vendor app when the board first starts.
+
+```yaml
+button:
+  - platform: wuzhi_amp
+    forget_amp:
+      name: Forget amp
+```
+
+"Forget amp" drops the stored amp; the next one found is adopted. To pin one amp instead, put its address in `mac_address`.
 
 ## Flashing guide
 
@@ -140,13 +150,12 @@ There are two ways to build: with an ESPHome Device Builder you already run (Hom
 
 The Device Builder fetches the component from GitHub, so no files need to be copied to it.
 
-1. In the Device Builder, open Secrets (top right) and add these entries, with values as described in `secrets.example.yaml`. Generate the API key as in step 3 of the command-line guide below, or with any base64 32-byte key generator. Use `00:00:00:00:00:00` for `amp_mac` for now.
+1. In the Device Builder, open Secrets (top right) and add these entries, with values as described in `secrets.example.yaml`. Generate the API key as in step 3 of the command-line guide below, or with any base64 32-byte key generator.
 
    ```yaml
    wifi_ssid: "..."
    wifi_password: "..."
    api_key: "..."
-   amp_mac: "00:00:00:00:00:00"
    ```
 
 2. Add a new device, skip the wizard if possible, and replace its YAML with the content of `wuzhi-amp.yaml`. In `external_components`, swap the active `type: local` source for the git one from the comment:
@@ -166,9 +175,8 @@ The Device Builder fetches the component from GitHub, so no files need to be cop
 3. First flash. A Device Builder on another machine can't reach the board's USB port, and browsers only allow USB flashing on HTTPS pages. So:
    1. Click Install, then Manual download, and choose the factory format. The first build takes several minutes.
    2. Open https://web.esphome.io in Chrome or Edge on the PC the board is plugged into, click Connect, pick the board's port, then Install and select the downloaded `.bin`. If no port shows up, hold BOOT while plugging the board in.
-4. Find the amp's address. Disconnect the phone app from the amp, then open the device's Logs in the Device Builder (over Wi-Fi). Look for the `find_amp` line shown in step 4 of the command-line guide. Put the address into Secrets as `amp_mac`.
-5. Click Install, then Wirelessly. From now on all updates go over Wi-Fi.
-6. Check the log as in step 6 below.
+4. Close the PWA or vendor app, so the amp advertises. The board finds it by name; see "Finding the amp".
+5. Check the log in the Device Builder (Logs) as in step 5 below. From now on, updates go over Wi-Fi (Install, then Wirelessly).
 
 ## Flashing with the command line
 
@@ -216,11 +224,11 @@ Generate an API encryption key:
 $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Fill($b); [Convert]::ToBase64String($b)
 ```
 
-Open `secrets.yaml` and fill in your Wi-Fi name and password, and the generated `api_key`. OTA updates use the same key. Leave `amp_mac` at `00:00:00:00:00:00` for now.
+Open `secrets.yaml` and fill in your Wi-Fi name and password, and the generated `api_key`. OTA updates use the same key.
 
-### 4. First flash over USB and find the amp's address
+### 4. First flash over USB
 
-1. Disconnect the amp from the phone app (close the PWA tab or the vendor app). The amp only shows up for others while nothing holds its control connection.
+1. Close the PWA or vendor app. The amp only advertises while nothing holds its control connection.
 2. Plug the board into the PC.
 3. Build and flash:
 
@@ -229,24 +237,10 @@ Open `secrets.yaml` and fill in your Wi-Fi name and password, and the generated 
    ```
 
    When asked for the upload port, pick the USB/COM port. If no port shows up, or the upload fails: unplug the board, hold the BOOT button, plug it back in, release BOOT, and run the command again.
-4. After flashing, ESPHome shows the log. Within a few seconds you should see a line like:
 
-   ```
-   [I][find_amp]: Found Wuzhi..., address AA:BB:CC:DD:EE:FF, RSSI -60
-   ```
+Later updates go over Wi-Fi: run the same command and pick the network address.
 
-   If nothing shows up: make sure no phone is connected to the amp's control channel, and move the board closer.
-5. Stop the log with Ctrl+C. Put the address into `secrets.yaml` as `amp_mac`.
-
-### 5. Second flash with the address
-
-```powershell
-esphome run wuzhi-amp.yaml
-```
-
-The board is on Wi-Fi now, so ESPHome offers an over-the-air upload as well as USB. Either works.
-
-### 6. Check the log
+### 5. Check the log
 
 ```powershell
 esphome logs wuzhi-amp.yaml
@@ -255,6 +249,7 @@ esphome logs wuzhi-amp.yaml
 A working connection looks like this (values from a ZK-502MT, private parts redacted):
 
 ```
+[I][wuzhi_amp]: Found amp "wuzhi APP", RSSI -60; stored (address not logged)
 [I][wuzhi_amp]: Connected to amp, discovering services
 [D][wuzhi_amp]: auth 1: send challenge
 [D][wuzhi_amp]: auth 2: device response verified; auth 3: send pass
@@ -268,9 +263,7 @@ A working connection looks like this (values from a ZK-502MT, private parts reda
 ...
 ```
 
-Once this works, the `on_ble_advertise` block in `wuzhi-amp.yaml` can be removed.
-
-### 7. Add it to Home Assistant (optional for now)
+### 6. Add it to Home Assistant (optional for now)
 
 Home Assistant usually discovers the board by itself: Settings, Devices and services, then configure the discovered "Wuzhi Amp" and enter the API key from `secrets.yaml`. There are no amp entities yet; this only checks that the link to Home Assistant works.
 
@@ -280,7 +273,8 @@ Home Assistant usually discovers the board by itself: Settings, Devices and serv
 |---|---|
 | No COM port when flashing | Use a data cable. Hold BOOT while plugging in. |
 | Board doesn't join Wi-Fi | Some C3 Super Mini boards have a weak antenna. Add `output_power: 8.5dB` under `wifi:` and flash over USB. |
-| `Service AE00 with AE01/AE02 not found` | The address in `amp_mac` belongs to a different device. |
+| `Service AE00 with AE01/AE02 not found` | The adopted device isn't the amp (another device with a matching name). Press Forget amp, or set `name_prefix` or `mac_address`. |
+| No `Found amp` line | Close the PWA and vendor app, move the board closer, check `name_prefix` against the amp's Bluetooth name. |
 | `auth: timeout waiting for step 2` | The amp didn't answer. Check that nothing else (phone, PC) holds the control connection. If other devices can't connect either, the amp's control channel is stuck: switch the amp off and on. |
 | `device response mismatch` | Not expected on a ZK-502MT. Please open an issue with the log, address redacted. |
 | Phone app can't find the amp | Expected while the ESP32 is connected. Power the board off to use the phone app. |
@@ -306,4 +300,4 @@ They check the E1 vectors from `docs/PROTOCOL.md` section 4, the frame examples 
 ## Next steps
 
 - Test EQ and AUX priority on the amp.
-- Find the amp without a configured address, and a public firmware file (with and without the web page).
+- Public firmware files (with and without the web page).

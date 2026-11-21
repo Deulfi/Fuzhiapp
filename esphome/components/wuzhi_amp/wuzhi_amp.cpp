@@ -5,6 +5,7 @@
 #include <esp_gattc_api.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 
@@ -43,6 +44,19 @@ static const uint32_t PRIORITY_RECHECK_MS = 2500;
 static const uint8_t PRIORITY_MAX_PER_MINUTE = 6;
 
 void WuzhiAmp::setup() {
+  // ble_client's mac_address 00:00:00:00:00:00 means: find the amp automatically.
+  this->configured_address_ = this->parent()->get_address();
+  this->address_pref_ = global_preferences->make_preference<uint64_t>(fnv1_hash("wuzhi_amp_address"));
+  if (this->configured_address_ == 0) {
+    uint64_t stored = 0;
+    if (this->address_pref_.load(&stored) && stored != 0) {
+      this->adopted_address_ = stored;
+      this->parent()->set_address(stored);
+      ESP_LOGI(TAG, "Using the stored amp");
+    } else {
+      ESP_LOGI(TAG, "No amp stored; looking for one named \"%s...\"", this->name_prefix_.c_str());
+    }
+  }
   this->publish_gain_();  // unknown until the amp reports it
   this->publish_connected_(false);
 #ifdef USE_SWITCH
@@ -60,6 +74,12 @@ void WuzhiAmp::dump_config() {
   ESP_LOGCONFIG(TAG, "  Log private identifiers: %s", YESNO(this->log_private_));
   ESP_LOGCONFIG(TAG, "  Auth delay: %u ms", static_cast<unsigned>(this->auth_delay_ms_));
   ESP_LOGCONFIG(TAG, "  Pair: %s", YESNO(this->pair_));
+  if (this->configured_address_ != 0) {
+    ESP_LOGCONFIG(TAG, "  Amp address: from the config");
+  } else {
+    ESP_LOGCONFIG(TAG, "  Amp address: found automatically (name prefix \"%s\"), %s", this->name_prefix_.c_str(),
+                  this->adopted_address_ != 0 ? "stored" : "none yet");
+  }
 #ifdef USE_NUMBER
   if (this->gain_number_ != nullptr) ESP_LOGCONFIG(TAG, "  Gain number, cap %d", this->max_gain_);
 #endif
@@ -803,6 +823,55 @@ void WuzhiAmp::enforce_priority_(const char *why) {
   this->switch_source_(true, "AUX priority");
   this->priority_recheck_at_ = now + PRIORITY_RECHECK_MS;
   if (this->priority_recheck_at_ == 0) this->priority_recheck_at_ = 1;
+}
+
+// --------------------------------------------------------------- auto-find ---
+
+static bool starts_with_ci(const char *s, const std::string &prefix) {
+  for (size_t i = 0; i < prefix.size(); i++) {
+    if (s[i] == '\0' || tolower(static_cast<unsigned char>(s[i])) != tolower(static_cast<unsigned char>(prefix[i])))
+      return false;
+  }
+  return true;
+}
+
+bool WuzhiAmp::parse_device(const espbt::ESPBTDevice &device) {
+  if (this->configured_address_ != 0 || this->adopted_address_ != 0) return false;
+  StringRef ref = device.get_name();
+  if (ref.empty()) return false;
+  const std::string name(ref.c_str(), ref.size());  // not NUL-terminated
+  if (!starts_with_ci(name.c_str(), this->name_prefix_)) return false;
+  uint64_t addr = device.address_uint64();
+  this->adopted_address_ = addr;
+  this->address_pref_.save(&addr);
+  global_preferences->sync();
+  this->parent()->set_address(addr);
+  if (this->log_private_) {
+    ESP_LOGI(TAG, "Found amp \"%s\" at %s, RSSI %d; stored", name.c_str(), this->parent()->address_str(),
+             device.get_rssi());
+  } else {
+    ESP_LOGI(TAG, "Found amp \"%s\", RSSI %d; stored (address not logged)", name.c_str(), device.get_rssi());
+  }
+  return false;  // ble_client connects on its next sighting
+}
+
+void WuzhiAmp::forget_amp() {
+  if (this->configured_address_ != 0) {
+    ESP_LOGW(TAG, "Forget amp: the address is set in the config, nothing to forget");
+    return;
+  }
+  ESP_LOGI(TAG, "Forgetting the stored amp; adopting the next one found");
+  uint64_t zero = 0;
+  this->address_pref_.save(&zero);
+  global_preferences->sync();
+  this->adopted_address_ = 0;
+  this->backoff_ms_ = 0;
+  this->reconnect_at_ = 0;
+  this->parent()->set_auto_connect(true);
+  if (this->link_ != Link::DISCONNECTED || this->parent()->state() != espbt::ClientState::IDLE) {
+    this->parent()->disconnect();
+  }
+  this->parent()->set_address(0);
 }
 
 }  // namespace wuzhi_amp

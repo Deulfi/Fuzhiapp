@@ -9,6 +9,8 @@
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
+#include "esphome/core/preferences.h"
+#include <string>
 #ifdef USE_NUMBER
 #include "esphome/components/number/number.h"
 #endif
@@ -21,6 +23,9 @@
 #ifdef USE_SWITCH
 #include "esphome/components/switch/switch.h"
 #endif
+#ifdef USE_BUTTON
+#include "esphome/components/button/button.h"
+#endif
 
 #include "wuzhi_protocol.h"
 
@@ -32,7 +37,7 @@ namespace espbt = esphome::esp32_ble_tracker;
 // BLE bridge to a Wuzhi ZK-502MT amp (Jieli RCSP over GATT service AE00).
 // Connects, runs the 5-step auth, sends GetTargetInfo and logs the decoded reply. With a gain
 // number configured it also reads GetSysInfo, follows the 0x09 push and steps gain.
-class WuzhiAmp : public Component, public ble_client::BLEClientNode {
+class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espbt::ESPBTDeviceListener {
  public:
   void setup() override;
   void loop() override;
@@ -42,6 +47,12 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                            esp_ble_gattc_cb_param_t *param) override;
   void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) override;
+  // Scan results: adopts the first amp whose name matches, when no address is configured.
+  bool parse_device(const espbt::ESPBTDevice &device) override;
+
+  void set_name_prefix(const std::string &p) { this->name_prefix_ = p; }
+  // From the "Forget amp" button: drop the stored amp and adopt the next one found.
+  void forget_amp();
 
   void set_log_private(bool v) { this->log_private_ = v; }
   void set_query_target_info(bool v) { this->query_target_info_ = v; }
@@ -141,6 +152,12 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode {
   uint8_t sn_{0};
   std::vector<Pending> pending_;
 
+  // auto-find
+  std::string name_prefix_{"wuzhi"};
+  uint64_t configured_address_{0};  // from ble_client mac_address; 0 = find automatically
+  uint64_t adopted_address_{0};
+  ESPPreferenceObject address_pref_;
+
   bool log_private_{false};
   bool query_target_info_{true};
 
@@ -210,6 +227,13 @@ class EqSelect : public select::Select, public Parented<WuzhiAmp> {
 class AuxPrioritySwitch : public switch_::Switch, public Parented<WuzhiAmp> {
  protected:
   void write_state(bool state) override { this->parent_->set_aux_priority(state); }
+};
+#endif
+
+#ifdef USE_BUTTON
+class ForgetAmpButton : public button::Button, public Parented<WuzhiAmp> {
+ protected:
+  void press_action() override { this->parent_->forget_amp(); }
 };
 #endif
 
