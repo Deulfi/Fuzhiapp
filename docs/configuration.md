@@ -103,6 +103,7 @@ number:
 ```
 
 - Presets Normal, Rock, Pop, Classical, Jazz, Country, and User.
+- The band numbers appear in the device page's Configuration section, not under Controls (set `entity_category: ""` on a band to move it back). Home Assistant sorts entities by name there, so "EQ 1 kHz" comes before "EQ 31 Hz"; a dashboard card shows them in the order you list them.
 - The band numbers show the curve the amp reports, also for presets. Changing a band (-12..+12 dB) writes the User EQ with that band changed.
 - The EQ only affects Bluetooth audio, not AUX.
 - After power-on the amp accepts an EQ only once it has played Bluetooth audio; until then it answers every EQ write with Normal. The bridge logs that, shows Normal (what the amp really uses), and sends your choice once more when Bluetooth audio connects or the source changes.

@@ -38,9 +38,14 @@ CONFIG_SCHEMA = cv.Schema(
             BeepVolumeNumber, icon="mdi:volume-low", entity_category=ENTITY_CATEGORY_CONFIG
         ),
         # User EQ band gains in dB (-12..+12). Changing one switches to the User EQ.
+        # In the Configuration section by default, so the device page's Controls stay
+        # short; override with entity_category per band.
         **{
             cv.Optional(key): number.number_schema(
-                EqBandNumber, icon="mdi:tune-vertical", unit_of_measurement=UNIT_DECIBEL
+                EqBandNumber,
+                icon="mdi:tune-vertical",
+                unit_of_measurement=UNIT_DECIBEL,
+                entity_category=ENTITY_CATEGORY_CONFIG,
             )
             for key in EQ_BAND_KEYS
         },
