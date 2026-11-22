@@ -210,7 +210,7 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
   int gain_target_{-1};
   bool gain_in_flight_{false};
   uint32_t gain_next_at_{0};
-  bool gain_direct_{false};  // next step goes straight to the target (only downwards, for mute)
+  bool gain_direct_{false};  // mute/unmute: down in one write, up in steps of 1 without pauses
 
   // mute
 #ifdef USE_SWITCH

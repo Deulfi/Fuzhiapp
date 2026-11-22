@@ -18,7 +18,7 @@ Clean-room: written from the project's own protocol notes and tests on the user'
 | EQ | select | Normal, Rock, Pop, Classical, Jazz, Country, User |
 | EQ 31 Hz .. EQ 16 kHz | number | the User EQ curve, -12..+12 dB |
 | AUX priority | switch | go back to AUX when the amp leaves it while a cable is in |
-| Mute | switch | gain to 0; off restores the old gain, stepped |
+| Mute | switch | gain to 0; off restores the old gain in fast steps |
 | Connect to amp | switch | off frees the amp for the PWA or vendor app, kept across reboots |
 | Beep, Beep volume | switch, number | the amp's prompt tones |
 | Disconnect phone audio | button | drops the phone's Bluetooth audio link |

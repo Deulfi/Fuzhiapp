@@ -33,6 +33,9 @@ static const uint32_t PAIR_TIMEOUT_MS = 15000;
 static const uint32_t BACKOFF_MIN_MS = 30000;
 static const uint32_t BACKOFF_MAX_MS = 600000;
 static const uint32_t GAIN_STEP_MS = 120;  // one step of 1 every 120 ms, like the PWA
+// Mute and unmute: still steps of 1 upwards, but each one right after the amp confirms the
+// last (one write in flight at a time), so 0 -> 20 takes well under a second.
+static const uint32_t GAIN_FAST_STEP_MS = 0;
 // Bluetooth audio (TargetInfo type 2 status) has no push; re-read it this often while the
 // sensor is configured. Read-only.
 static const uint32_t TARGET_POLL_MS = 30000;
@@ -609,7 +612,7 @@ void WuzhiAmp::step_gain_() {
   // stepping down would send values above it. Down is the safe direction.
   int next = this->gain_current_ > this->max_gain_ ? this->max_gain_
                                                    : proto::next_gain_step(this->gain_current_, this->gain_target_);
-  // Mute: lowering is safe, so it goes in one write.
+  // Mute: lowering is safe, so it goes in one write. Unmute goes up in fast steps of 1.
   if (this->gain_direct_ && this->gain_target_ < this->gain_current_) next = this->gain_target_;
   proto::Bytes payload = proto::set_gain_payload(next, this->max_gain_);
   if (payload.empty()) {  // can't happen with a clamped target; never send it anyway
@@ -620,7 +623,7 @@ void WuzhiAmp::step_gain_() {
   this->gain_in_flight_ = true;
   bool sent = this->request_(proto::op::SET_SYS_INFO, payload, [this, next](const proto::Frame *reply) {
     this->gain_in_flight_ = false;
-    this->gain_next_at_ = millis() + GAIN_STEP_MS;
+    this->gain_next_at_ = millis() + (this->gain_direct_ ? GAIN_FAST_STEP_MS : GAIN_STEP_MS);
     if (reply == nullptr || reply->status != 0) {
       ESP_LOGW(TAG, "Gain step to %d not confirmed, stopping", next);
       this->gain_target_ = -1;
@@ -1150,8 +1153,8 @@ void WuzhiAmp::set_mute(bool on) {
     if (back > this->max_gain_) back = this->max_gain_;
     this->muted_ = false;
     this->gain_before_mute_ = -1;
-    ESP_LOGI(TAG, "Unmute (gain -> %d, stepped)", back);
-    this->gain_direct_ = false;
+    ESP_LOGI(TAG, "Unmute (gain -> %d, fast steps)", back);
+    this->gain_direct_ = true;
     this->gain_target_ = back;
   }
   this->publish_mute_();

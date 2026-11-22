@@ -82,7 +82,8 @@ switch:
 ```
 
 - On: gain to 0 in one write (lowering needs no stepping).
-- Off: back to the gain before muting, stepped like any increase and never above `max_gain`.
+- Off: back to the gain before muting, in steps of 1 without the usual pause (each step waits only for the amp's reply, so 0 to 20 takes well under a second), never above `max_gain`.
+- It stays a switch: ESPHome entities have a fixed icon, so a button can't show whether the amp is muted. On a dashboard, a tile card on the switch works as a mute button.
 - Changing the gain ends the mute, and so does a gain change made elsewhere.
 
 ## Connect to amp
