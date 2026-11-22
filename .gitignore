@@ -6,3 +6,7 @@ original app images/
 rcsp-log-*.txt
 __pycache__/
 .claude/
+
+# local research, not for the public repo
+docs/AC6925A_QSOP24_datasheet.pdf
+docs/firmware_cleanroom_report.md

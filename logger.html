@@ -7,12 +7,45 @@
     <link rel="stylesheet" href="/src/logger/logger.css" />
   </head>
   <body>
-    <header>
-      <h1>RCSP protocol logger <a class="app-link" href="./">Go to app</a></h1>
-      <div class="status">
-        <span id="st-conn" class="pill">disconnected</span>
-        <span id="st-auth" class="pill">not authenticated</span>
-        <span id="st-cap" class="pill">volume cap: none</span>
+    <header id="top">
+      <div class="title-row">
+        <h1>RCSP protocol logger</h1>
+        <a class="app-link" href="./">Go to app</a>
+      </div>
+      <div class="status-bar">
+        <div class="tile" id="tile-amp">
+          <span class="k">Amp</span>
+          <span class="v" id="st-amp">Not connected</span>
+          <span class="s" id="st-auth">not authenticated</span>
+        </div>
+        <div class="tile wide" id="tile-source">
+          <span class="k">Active source</span>
+          <span class="v" id="st-source">–</span>
+        </div>
+        <div class="tile" id="tile-phone">
+          <span class="k">Phone audio</span>
+          <span class="v" id="st-phone">–</span>
+          <span class="s">from last GetTargetInfo</span>
+        </div>
+        <div class="tile" id="tile-aux">
+          <span class="k">AUX cable</span>
+          <span class="v" id="st-aux">–</span>
+        </div>
+        <div class="tile">
+          <span class="k">Gain</span>
+          <span class="v" id="st-gain">–</span>
+          <span class="s" id="st-cap">cap: none</span>
+        </div>
+        <div class="tile">
+          <span class="k">EQ</span>
+          <span class="v" id="st-eq">–</span>
+        </div>
+      </div>
+      <div class="row conn-row">
+        <button id="btn-connect" class="primary">Connect</button>
+        <button id="btn-reconnect">Reconnect last amp</button>
+        <button id="btn-refresh" class="needs-conn" disabled>Refresh status</button>
+        <button id="btn-disconnect" disabled>Disconnect</button>
       </div>
       <p id="no-bt" class="warn" hidden>
         Web Bluetooth isn't available in this browser. Use Chrome on Android or desktop, served from https or localhost.
@@ -20,181 +53,204 @@
     </header>
 
     <main>
-      <section>
-        <h2>Connection</h2>
-        <div class="grid">
-          <label>Device chooser filter
-            <select id="filter">
-              <option value="all">All devices (service AE00 optional)</option>
-              <option value="service">Advertises service AE00</option>
-              <option value="name" selected>Name prefix (case-sensitive)</option>
+      <div class="controls">
+        <section>
+          <h2>Source and phone</h2>
+          <div class="row">
+            <button id="btn-src-bt" class="needs-conn src" data-src="bluetooth" disabled>Bluetooth</button>
+            <button id="btn-src-aux" class="needs-conn src" data-src="aux" disabled>AUX</button>
+            <button id="btn-disc-classic" class="needs-conn" disabled>Drop phone audio (06)</button>
+          </div>
+          <p class="muted small">Source buttons send opcode 0E. Drop phone audio disconnects the phone's audio link; with an AUX cable in, the amp then plays AUX by itself. It only works while the amp is on Bluetooth.</p>
+          <div class="checks">
+            <label><input id="prio-aux" type="checkbox" /> AUX priority: switch back to AUX when Bluetooth takes over (the phone stays connected)</label>
+          </div>
+          <details>
+            <summary>Alternative source commands</summary>
+            <div class="row">
+              <button id="btn-sel-aux" class="needs-conn" disabled>AUX via AA 02 08 03 55</button>
+              <button id="btn-sel-bt" class="needs-conn" disabled>Bluetooth via AA 02 08 01 55</button>
+            </div>
+            <p class="muted small">The vendor app uses these instead of opcode 0E. On the ZK-502MT they behave the same, and AUX is still forgotten on power loss. If you find a way to make the amp start on AUX, please open an issue.</p>
+            <div class="row" id="source-other"></div>
+          </details>
+        </section>
+
+        <section>
+          <h2>USB / Music</h2>
+          <p class="muted small">For boards with a USB port added. The ZK-502MT normally has none, and its Music source answers with an error. "Watch" re-reads the online-device bits (attribute 2) every second and logs every bit that changes, plus every source change, with the time, so dropouts and resets show up in the log. A GATT disconnect is logged too.</p>
+          <div class="row">
+            <button id="btn-src-usb" class="needs-conn src" data-src="other" disabled>Music / USB (0E FF 01)</button>
+            <button id="btn-sel-usb" class="needs-conn" disabled>USB via AA 02 08 02 55</button>
+            <button id="btn-usb-read" class="needs-conn" disabled>Read Music attributes (07 01)</button>
+            <button id="btn-online-read" class="needs-conn" disabled>Read online bits (07 attr 2)</button>
+          </div>
+          <div class="checks">
+            <label><input id="usb-watch" type="checkbox" /> Watch online bits and source (read-only, every second)</label>
+          </div>
+          <p class="muted small">Online bits now: <code id="online-bits">?</code></p>
+        </section>
+
+        <section>
+          <h2>Gain and EQ</h2>
+          <div class="row">
+            <label class="gain">Gain
+              <input id="gain" type="range" min="0" max="40" step="1" value="0" class="needs-conn" disabled />
+            </label>
+            <code id="gain-val">?</code>
+            <span class="muted">Last read: <code id="last-vol">?</code></span>
+          </div>
+          <div class="row">
+            <label class="inline-field">Volume cap
+              <input id="cap" type="number" min="0" max="255" placeholder="none" />
+            </label>
+            <button id="btn-cap">Set cap</button>
+            <button id="btn-cap-clear">Clear cap</button>
+          </div>
+          <p class="muted small">Gain writes are blocked until you set a cap you have confirmed is safe on your amp. Writes above the cap are always blocked. The slider steps one value at a time.</p>
+          <div class="row">
+            <select id="eq-mode">
+              <option value="0">Normal</option>
+              <option value="1">Rock</option>
+              <option value="2">Pop</option>
+              <option value="3">Classical</option>
+              <option value="4">Jazz</option>
+              <option value="5">Country</option>
+              <option value="6">User</option>
             </select>
-          </label>
-          <label>Name prefixes (comma separated)
-            <input id="prefixes" value="wuzhi,Wuzhi,ZK,JL" />
-          </label>
-          <label>Write chunk size (bytes)
-            <input id="chunk" type="number" min="20" max="512" value="20" />
-          </label>
-          <label>Write type
-            <select id="writemode">
-              <option value="auto">Auto (from characteristic properties)</option>
-              <option value="with-response">With response</option>
-              <option value="without-response">Without response</option>
-            </select>
-          </label>
-        </div>
-        <div class="checks">
-          <label><input id="answer-dev" type="checkbox" checked /> Auth steps 4–5 (answer device challenge)</label>
-          <label><input id="auto-run" type="checkbox" checked /> After auth, send GetTargetInfo and GetSysInfo (read-only)</label>
-          <label><input id="auto-ack" type="checkbox" checked /> Acknowledge device pushes (bare ack)</label>
-          <label><input id="prio-aux" type="checkbox" /> AUX priority (go back to AUX when Bluetooth takes over)</label>
-        </div>
-        <div class="row">
-          <button id="btn-connect" class="primary">Connect</button>
-          <button id="btn-reconnect">Reconnect last amp</button>
-          <button id="btn-auth" disabled>Run handshake</button>
-          <button id="btn-disconnect" disabled>Disconnect</button>
-        </div>
-      </section>
+            <button id="btn-eq-mode" class="needs-conn" disabled>Set EQ</button>
+            <span class="muted">Last read: <code id="last-eq">?</code></span>
+          </div>
+          <p class="muted small">EQ only affects Bluetooth audio. After power-on the amp keeps Normal until Bluetooth audio has played once.</p>
+        </section>
 
-      <section>
-        <h2>Read-only queries</h2>
-        <div class="row">
-          <button data-cmd="targetinfo" class="needs-conn" disabled>GetTargetInfo (all)</button>
-          <button data-cmd="sysinfo" class="needs-conn" disabled>GetSysInfo public (FFF7)</button>
-          <button data-cmd="dspinfo" class="needs-conn" disabled>DSP read info (0x1F)</button>
-        </div>
-      </section>
+        <section>
+          <h2>Read (no changes)</h2>
+          <div class="row">
+            <button data-cmd="targetinfo" class="needs-conn" disabled>GetTargetInfo</button>
+            <button data-cmd="sysinfo" class="needs-conn" disabled>GetSysInfo</button>
+            <button data-wuzhi="01" class="needs-conn" disabled>Model (01)</button>
+            <button data-wuzhi="12" class="needs-conn" disabled>Beep (12)</button>
+            <button data-wuzhi="13" class="needs-conn" disabled>Pairing code on/off (13)</button>
+            <button data-wuzhi="1b" class="needs-conn" disabled>EQ (1B)</button>
+            <button data-wuzhi="19" class="needs-conn" disabled>Volume (19)</button>
+            <button data-wuzhi="1a" class="needs-conn" disabled>LED level (1A)</button>
+            <button data-cmd="dspinfo" class="needs-conn" disabled>DSP info (1F)</button>
+          </div>
+          <p class="muted small">Replies to the Wuzhi reads arrive as pushes, decoded in the log. LED gets no reply and DSP an empty one on the ZK-502MT. The decoded line hides the pairing code, but the raw RX line shows its 4 digits; exported logs redact it unless you tick the box.</p>
+        </section>
 
-      <section>
-        <h2>Device identity</h2>
-        <div id="identity"></div>
-      </section>
+        <section>
+          <h2>Amp settings</h2>
+          <div class="row">
+            <label><input id="beep-on" type="checkbox" checked /> Beep on</label>
+            <input id="beep-vol" type="number" min="0" max="30" value="5" />
+            <button id="btn-beep" class="needs-conn" disabled>Set beep</button>
+          </div>
+          <div class="row">
+            <label><input id="pin-on" type="checkbox" checked /> Pairing code on</label>
+            <input id="pin-code" maxlength="4" inputmode="numeric" placeholder="4 digits" spellcheck="false" />
+            <button id="btn-pin" class="needs-conn" disabled>Set pairing code</button>
+          </div>
+          <p class="muted small">Used when a phone or PC pairs for audio (default 1111). The amp restarts after this.</p>
+          <div class="row">
+            <input id="bt-name" maxlength="20" placeholder="New Bluetooth name (max 20)" spellcheck="false" />
+            <button id="btn-rename" class="needs-conn" disabled>Rename</button>
+          </div>
+          <p class="muted small">The amp restarts and the link drops. Afterwards, remove the old name on your phone or PC and pair the new one.</p>
+        </section>
 
-      <section>
-        <h2>SDK probes (read-only)</h2>
-        <p class="muted">Commands from docs/SDK_EXTRAS.md §2 that the vendor app never sends. None changes a setting. An amp that doesn't implement one answers with an error status, an empty reply or nothing. "Run all" sends them one after another and writes a summary to the log.</p>
-        <div class="row" id="probe-buttons"></div>
-      </section>
+        <section>
+          <h2>Send a frame</h2>
+          <div class="grid">
+            <label>Mode
+              <select id="send-mode">
+                <option value="op">Opcode + payload (header and sn added)</option>
+                <option value="raw">Full raw hex (as-is)</option>
+              </select>
+            </label>
+            <label class="op-only">Opcode (hex)
+              <input id="send-op" value="07" />
+            </label>
+            <label class="span2"><span id="send-label">Payload (hex, after sn)</span>
+              <input id="send-hex" value="ff 00 00 00 02" spellcheck="false" />
+            </label>
+          </div>
+          <div class="checks op-only">
+            <label><input id="send-expect" type="checkbox" checked /> Expect response (flags 0xC0, else 0x80)</label>
+          </div>
+          <p class="preview">Will send: <code id="send-preview"></code></p>
+          <p class="preview">Guard: <span id="send-verdict"></span></p>
+          <div class="row">
+            <button id="btn-send" class="needs-conn primary" disabled>Send</button>
+            <span class="muted">Next sn: <code id="next-sn">0</code></span>
+          </div>
+        </section>
 
-      <section>
-        <h2>Write tests</h2>
-        <p class="muted">Each button sends one command, then re-reads GetSysInfo.</p>
-        <div class="row" id="source-buttons"><span class="muted">Source buttons appear after GetTargetInfo.</span></div>
-        <div class="row">
-          <label class="gain">Gain
-            <input id="gain" type="range" min="0" max="40" step="1" value="0" class="needs-conn" disabled />
-          </label>
-          <code id="gain-val">?</code>
-          <span class="muted">Last read: <code id="last-vol">?</code></span>
-        </div>
-        <div class="row">
-          <select id="eq-mode">
-            <option value="0">Normal</option>
-            <option value="1">Rock</option>
-            <option value="2">Pop</option>
-            <option value="3">Classical</option>
-            <option value="4">Jazz</option>
-            <option value="5">Country</option>
-            <option value="6">User</option>
-          </select>
-          <button id="btn-eq-mode" class="needs-conn" disabled>Set EQ</button>
-          <span class="muted">Last read EQ: <code id="last-eq">?</code></span>
-        </div>
-      </section>
+        <details class="card">
+          <summary>Connection options</summary>
+          <div class="grid">
+            <label>Device chooser filter
+              <select id="filter">
+                <option value="all">All devices (service AE00 optional)</option>
+                <option value="service">Advertises service AE00</option>
+                <option value="name" selected>Name prefix (case-sensitive)</option>
+              </select>
+            </label>
+            <label>Name prefixes (comma separated)
+              <input id="prefixes" value="wuzhi,Wuzhi,ZK,JL" />
+            </label>
+            <label>Write chunk size (bytes)
+              <input id="chunk" type="number" min="20" max="512" value="20" />
+            </label>
+            <label>Write type
+              <select id="writemode">
+                <option value="auto">Auto (from characteristic properties)</option>
+                <option value="with-response">With response</option>
+                <option value="without-response">Without response</option>
+              </select>
+            </label>
+          </div>
+          <div class="checks">
+            <label><input id="answer-dev" type="checkbox" checked /> Auth steps 4–5 (answer device challenge)</label>
+            <label><input id="auto-run" type="checkbox" checked /> After auth, send GetTargetInfo and GetSysInfo (read-only)</label>
+            <label><input id="auto-ack" type="checkbox" checked /> Acknowledge device pushes (bare ack)</label>
+          </div>
+          <div class="row">
+            <button id="btn-auth" disabled>Run handshake again</button>
+          </div>
+        </details>
 
-      <section>
-        <h2>Device settings</h2>
-        <p class="muted">Reads go out without asking. Replies arrive as pushes, decoded in the log. The decoded line hides the pairing code, but the raw RX line shows its 4 digits: remove that line before sharing a log.</p>
-        <div class="row">
-          <button data-wuzhi="01" class="needs-conn" disabled>Read model (product code)</button>
-          <button data-wuzhi="12" class="needs-conn" disabled>Read beep</button>
-          <button data-wuzhi="13" class="needs-conn" disabled>Read pairing code on/off</button>
-          <button data-wuzhi="1a" class="needs-conn" disabled>Read LED level</button>
-          <button data-wuzhi="1b" class="needs-conn" disabled>Read EQ (1B)</button>
-          <button data-wuzhi="19" class="needs-conn" disabled>Read volume (19)</button>
-        </div>
-        <div class="row">
-          <label><input id="beep-on" type="checkbox" checked /> Beep on</label>
-          <input id="beep-vol" type="number" min="0" max="30" value="5" />
-          <button id="btn-beep" class="needs-conn" disabled>Set beep</button>
-        </div>
-        <div class="row">
-          <button id="btn-sel-aux" class="needs-conn" disabled>AUX via AA 02 08 03 55</button>
-          <button id="btn-sel-bt" class="needs-conn" disabled>Bluetooth via AA 02 08 01 55</button>
-          <span class="muted">Alternative source commands (the vendor app uses these instead of opcode 0E). On the ZK-502MT they behave the same, and AUX is still forgotten on power loss. If you find a way to make the amp start on AUX, please open an issue.</span>
-        </div>
-        <div class="row">
-          <label><input id="pin-on" type="checkbox" checked /> Pairing code on</label>
-          <input id="pin-code" maxlength="4" inputmode="numeric" placeholder="4 digits" spellcheck="false" />
-          <button id="btn-pin" class="needs-conn" disabled>Set pairing code</button>
-          <span class="muted">Used when a phone or PC pairs for audio (default 1111).</span>
-        </div>
-        <div class="row">
-          <input id="bt-name" maxlength="20" placeholder="New Bluetooth name (max 20)" spellcheck="false" />
-          <button id="btn-rename" class="needs-conn" disabled>Rename</button>
-          <span class="muted">The amp restarts by itself and the link drops. Afterwards, unpair the old name on Windows/phone and pair the new one.</span>
-        </div>
-        <div class="row">
-          <button id="btn-disc-classic" class="needs-conn" disabled>Drop phone audio (opcode 06)</button>
-          <span class="muted">Drops the phone's audio link; with an AUX cable in, the amp then plays AUX.</span>
-        </div>
-        <div class="row">
-          <button id="btn-reboot" class="needs-conn" disabled>Reboot (opcode E7)</button>
-          <button id="btn-power-off" class="needs-conn" disabled>Power off / standby (AA 01 04 55)</button>
-          <span class="muted">Reboot: no reply and no effect on the ZK-502MT. Power off leaves the amp half-asleep (no source switching) until you power-cycle it.</span>
-        </div>
-      </section>
+        <details class="card">
+          <summary>Timing</summary>
+          <p class="muted small">How long to wait in situations where the amp or the phone needs time to react. Saved in this browser and used by the app too (reload the app after saving). Values are clamped to sane limits.</p>
+          <div class="grid" id="timing-fields"></div>
+          <div class="row">
+            <button id="btn-timing-save">Save</button>
+            <button id="btn-timing-reset">Reset to defaults</button>
+          </div>
+        </details>
 
-      <section>
-        <h2>Send a frame</h2>
-        <div class="grid">
-          <label>Mode
-            <select id="send-mode">
-              <option value="op">Opcode + payload (header and sn added)</option>
-              <option value="raw">Full raw hex (as-is)</option>
-            </select>
-          </label>
-          <label class="op-only">Opcode (hex)
-            <input id="send-op" value="07" />
-          </label>
-          <label class="span2"><span id="send-label">Payload (hex, after sn)</span>
-            <input id="send-hex" value="ff 00 00 00 02" spellcheck="false" />
-          </label>
-        </div>
-        <div class="checks op-only">
-          <label><input id="send-expect" type="checkbox" checked /> Expect response (flags 0xC0, else 0x80)</label>
-        </div>
-        <p class="preview">Will send: <code id="send-preview"></code></p>
-        <p class="preview">Guard: <span id="send-verdict"></span></p>
-        <div class="row">
-          <button id="btn-send" class="needs-conn primary" disabled>Send</button>
-          <span class="muted">Next sn: <code id="next-sn">0</code></span>
-        </div>
-      </section>
+        <details class="card">
+          <summary>Device identity</summary>
+          <div id="identity"></div>
+        </details>
 
-      <section>
-        <h2>Timing</h2>
-        <p class="muted">How long to wait in situations where the amp or the phone needs time to react. Saved in this browser and used by the app too (reload the app after saving). Values are clamped to sane limits.</p>
-        <div class="grid" id="timing-fields"></div>
-        <div class="row">
-          <button id="btn-timing-save">Save</button>
-          <button id="btn-timing-reset">Reset to defaults</button>
-        </div>
-      </section>
+        <details class="card">
+          <summary>SDK probes (read-only)</summary>
+          <p class="muted small">Commands from docs/SDK_EXTRAS.md §2 that the vendor app never sends. None changes a setting. The ZK-502MT answers none of them usefully (§6). "Run all" sends them one after another and writes a summary to the log.</p>
+          <div class="row" id="probe-buttons"></div>
+        </details>
 
-      <section>
-        <h2>Volume cap</h2>
-        <p class="muted">
-          Volume writes are blocked until you set a cap you have confirmed is safe on your amp. Writes above the cap are always blocked.
-        </p>
-        <div class="row">
-          <input id="cap" type="number" min="0" max="255" placeholder="none" />
-          <button id="btn-cap">Set cap</button>
-          <button id="btn-cap-clear">Clear cap</button>
-        </div>
-      </section>
+        <details class="card">
+          <summary>Commands with no use on the ZK-502MT</summary>
+          <div class="row">
+            <button id="btn-reboot" class="needs-conn" disabled>Reboot (opcode E7)</button>
+            <button id="btn-power-off" class="needs-conn" disabled>Power off / standby (AA 01 04 55)</button>
+          </div>
+          <p class="muted small">Reboot: no reply and no effect. Power off leaves the amp half-asleep (no source switching) until you power-cycle it.</p>
+        </details>
+      </div>
 
       <section class="log-section">
         <h2>Log</h2>

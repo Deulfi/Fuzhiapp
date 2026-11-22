@@ -66,13 +66,28 @@ Most of these are how the amp's firmware behaves. The app works around them wher
 
 **The app can't tell which device is connected for audio**, only whether one is. The amp doesn't report it.
 
-**The amp starts on Bluetooth after every power-on**, even with an AUX cable plugged in. It doesn't remember AUX. The usual fix is to unplug and replug the cable, or press AUX in the app. The app can't change this permanently: AUX priority only works while the app is open and connected.
+**The amp starts on Bluetooth after every power-on**, even with an AUX cable plugged in. It doesn't remember AUX. The usual fix is to unplug and replug the cable, or press AUX in the app. The app can't change this permanently: AUX priority only works while the app is open and connected. The [ESP32 bridge](#always-on-the-esp32-bridge-for-home-assistant) keeps it working all the time.
 
 **The equalizer only affects Bluetooth audio.** On AUX it changes nothing you can hear.
 
 **After power-on, the EQ is locked to Normal** until the amp has played something over Bluetooth once. Until then the amp quietly ignores EQ changes, and the app says so and offers "Try again". The EQ also resets to Normal on every power-on.
 
 **Not available on the ZK-502MT:** lights, bass and treble (the knobs on the board are analog), the DSP screen, USB and SD playback, and firmware updates.
+
+## Always on: the ESP32 bridge for Home Assistant
+
+The app only controls the amp while it's open. For a fixed setup there is a second way: a small ESP32-C3 board (a "Super Mini", a few euros) that stays connected to the amp all the time and makes it available to Home Assistant over Wi-Fi. It runs ESPHome.
+
+- **The same controls:** gain, source, EQ presets and the 10 bands, beep, disconnecting the phone's audio, AUX cable and Bluetooth audio state.
+- **AUX priority all the time,** not only while the app is open.
+- **Home Assistant automations,** dashboards and voice control. Without Home Assistant, the "web" firmware serves a control page on the board itself.
+- **The same safety rules as the app:** gain capped and changed in small steps, nothing sent on connect.
+
+The amp allows only one control connection. While the bridge is connected, this app and the vendor app can't connect; power the board off to use them.
+
+**Get it:** download a ready-made firmware file from the [latest release](https://github.com/Deulfi/Fuzhiapp/releases/latest) and flash it from the browser at https://web.esphome.io. No ESPHome install, nothing to configure: Wi-Fi is set up after flashing and the amp is found by name. There are two files: `wuzhi-amp-lean-factory.bin` for Home Assistant only, and `wuzhi-amp-web-factory.bin` with the control page.
+
+Step-by-step guides, building it yourself with ESPHome, and how the bridge works are on the [`esphome-bridge` branch](https://github.com/Deulfi/Fuzhiapp/tree/esphome-bridge).
 
 ## Other models
 

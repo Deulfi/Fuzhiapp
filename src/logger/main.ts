@@ -39,6 +39,8 @@ let deviceMaxVolume: number | null = null;
 const effectiveCap = () => volumeCap;
 const CONN_KEY = 'rcsp-logger.connection';
 let t0 = performance.now();
+/** True while a watch poll is in flight: its TX/RX/DEC lines are not logged, only changes are. */
+let quiet = false;
 const lines: string[] = [];
 
 // ---------- log ----------
@@ -109,24 +111,43 @@ function guard(bytes: Uint8Array) {
 }
 
 // ---------- UI state ----------
+let deviceName = '';
 function setConn(state: 'disconnected' | 'connecting' | 'connected') {
-  const p = $('st-conn');
-  p.textContent = state;
-  p.className = 'pill' + (state === 'connected' ? ' ok' : '');
+  $('st-amp').textContent = state === 'connected' ? deviceName || '(no name)' : state === 'connecting' ? 'Connecting…' : 'Not connected';
+  $('tile-amp').className = 'tile' + (state === 'connected' ? ' ok' : state === 'connecting' ? ' busy' : '');
   const on = state === 'connected';
   $<HTMLButtonElement>('btn-connect').disabled = state !== 'disconnected';
   $<HTMLButtonElement>('btn-disconnect').disabled = state === 'disconnected';
   $<HTMLButtonElement>('btn-auth').disabled = !on;
   document.querySelectorAll<HTMLButtonElement>('.needs-conn').forEach((b) => (b.disabled = !on));
+  if (!on) ampState = {};
+  renderStatus();
+}
+
+const SOURCE_TEXT: Record<string, string> = { bluetooth: 'Bluetooth', aux: 'AUX', idle: 'Idle', other: 'Other (Music/USB?)' };
+
+/** The tiles at the top: what the amp last reported. */
+function renderStatus() {
+  const s = ampState;
+  const src = s.source;
+  $('st-source').textContent = src ? SOURCE_TEXT[src]! : '–';
+  $('tile-source').className = 'tile wide' + (src ? ` src-${src}` : '');
+  $('st-phone').textContent = s.a2dp === undefined ? '–' : s.a2dp ? 'Connected' : 'Not connected';
+  $('tile-phone').className = 'tile' + (s.a2dp ? ' ok' : '');
+  $('st-aux').textContent = s.auxInserted === undefined ? '–' : s.auxInserted ? 'Plugged in' : 'Not plugged in';
+  $('tile-aux').className = 'tile' + (s.auxInserted ? ' ok' : '');
+  const vol = s.volume ?? lastVolume;
+  $('st-gain').textContent = vol === undefined || vol === null ? '–' : String(vol);
+  $('st-eq').textContent = s.eq ? eqName(s.eq.mode) : '–';
+  document.querySelectorAll<HTMLButtonElement>('button.src').forEach((b) => b.classList.toggle('active', b.dataset.src === src));
 }
 function setAuth(state: 'none' | 'running' | 'ok' | 'failed') {
   authed = state === 'ok';
-  const p = $('st-auth');
-  p.textContent = { none: 'not authenticated', running: 'authenticating…', ok: 'authenticated', failed: 'auth failed' }[state];
-  p.className = 'pill' + (state === 'ok' ? ' ok' : state === 'failed' ? ' bad' : '');
+  $('st-auth').textContent = { none: 'not authenticated', running: 'authenticating…', ok: 'authenticated', failed: 'auth failed' }[state];
+  if (state === 'failed') $('tile-amp').className = 'tile bad';
 }
 function renderCap() {
-  $('st-cap').textContent = `volume cap: ${volumeCap ?? 'none'}${deviceMaxVolume !== null ? ` (amp max ${deviceMaxVolume})` : ''}`;
+  $('st-cap').textContent = `cap ${volumeCap ?? 'none'}${deviceMaxVolume !== null ? `, amp max ${deviceMaxVolume}` : ''}`;
   $<HTMLInputElement>('cap').value = volumeCap === null ? '' : String(volumeCap);
   updatePreview();
 }
@@ -171,14 +192,19 @@ async function connect(known?: BluetoothDevice) {
     const filter = $<HTMLSelectElement>('filter').value as ScanFilter;
     const prefixes = $<HTMLInputElement>('prefixes').value.split(',').map((s) => s.trim()).filter(Boolean);
     const device = known ?? (await pickDevice(filter, prefixes));
-    t0 = performance.now();
+    deviceName = device.name ?? '';
+    if (!known) t0 = performance.now();
     log('INFO', `picked "${device.name ?? '(no name)'}"`, `filter=${filter}`);
     const t = new BleTransport(device, {
-      onRx: (b) => log('RX', toHex(b), describeRaw(b)),
-      onTx: (b, chunks) => log('TX', toHex(b), describeRaw(b) + (chunks > 1 ? `; sent in ${chunks} chunks` : '')),
+      onRx: (b) => !quiet && log('RX', toHex(b), describeRaw(b)),
+      onTx: (b, chunks) => !quiet && log('TX', toHex(b), describeRaw(b) + (chunks > 1 ? `; sent in ${chunks} chunks` : '')),
       onInfo: (m) => log('INFO', m),
       onDisconnect: () => {
-        log('INFO', 'GATT disconnected');
+        const since = lastGood ? ` ${Math.round(performance.now() - lastGood)} ms after the last good reply` : '';
+        log('ERR', `GATT disconnected${watchTimer ? ` while watching,${since}` : ''}`);
+        if (watchTimer) void watchReconnect(device);
+        lastOnline = null;
+        lastSourceSeen = undefined;
         client?.stop();
         client = null;
         transport = null;
@@ -195,6 +221,7 @@ async function connect(known?: BluetoothDevice) {
       {
         onFrame: (f, matched, rtt) => {
           if (f.isCommand) return; // pushes are logged by onPush
+          if (quiet) return onReply(f); // watch poll: only changes are logged
           const how = matched ? (rtt !== undefined ? ` (${rtt} ms)` : '') : ' (unmatched)';
           log('DEC', `reply op ${hx(f.opcode)} sn ${hx(f.sn)} status ${hx(f.status!)}${how}`, describePayload(f));
           onReply(f);
@@ -209,6 +236,9 @@ async function connect(known?: BluetoothDevice) {
           const before = ampState;
           ampState = applyPush(ampState, f).state;
           const cableIn = !before.auxInserted && ampState.auxInserted;
+          if (f.opcode === Op.SysInfoPush) trackOnline(f.payload);
+          trackSource();
+          renderStatus();
           if (ampState.source !== before.source || cableIn) void loggerPriority();
         },
         onDiscard: (b) => log('INFO', `discarded ${b.length} B outside frames`, toHex(b)),
@@ -225,6 +255,8 @@ async function connect(known?: BluetoothDevice) {
     if (!transport?.connected) {
       transport?.disconnect();
       transport = null;
+      client?.stop();
+      client = null;
       setConn('disconnected');
     }
   }
@@ -247,7 +279,9 @@ async function handshake() {
       if ($<HTMLInputElement>('auto-run').checked) {
         await request(Op.GetTargetInfo, Payload.targetInfoAll());
         await request(Op.GetSysInfo, Payload.sysInfoPublicAll());
+        compareAfterDrop();
       }
+      lastGood = performance.now();
       return;
     } catch (e) {
       log('ERR', `handshake attempt ${attempt}/3: ${errText(e)}`);
@@ -399,7 +433,116 @@ function renderTiming() {
   }
 }
 
+// ---------- USB / online-device debugging ----------
+/** Last raw bytes of public attr 2 (online devices). Bit 4 of byte 0 is the AUX cable [obs]; the rest are unknown. */
+let lastOnline: Uint8Array | null = null;
+let lastSourceSeen: string | undefined;
+let watchTimer: ReturnType<typeof setInterval> | undefined;
+
+const bitList = (b: Uint8Array) => {
+  const out: string[] = [];
+  b.forEach((v, i) => {
+    for (let k = 0; k < 8; k++) if (v & (1 << k)) out.push(`${i}.${k}`);
+  });
+  return out;
+};
+
+/** Log which online bits changed (byte.bit), from any SysInfo reply or push. */
+function trackOnline(payload: Uint8Array) {
+  let info;
+  try {
+    info = parseSysInfo(payload);
+  } catch {
+    return;
+  }
+  if (info.function === FunctionId.Music) log('NOTE', 'Music function answered', toHex(payload));
+  const t = info.pub?.tlvs.find((x) => x.type === 2);
+  if (!t) return;
+  const now = Uint8Array.from(t.data);
+  $('online-bits').textContent = `${toHex(now)}  (set: ${bitList(now).join(' ') || 'none'})`;
+  if (lastOnline) {
+    const changes: string[] = [];
+    for (let i = 0; i < Math.max(now.length, lastOnline.length); i++) {
+      const a = lastOnline[i] ?? 0;
+      const b = now[i] ?? 0;
+      for (let k = 0; k < 8; k++) {
+        const m = 1 << k;
+        if ((a & m) !== (b & m)) changes.push(`${i}.${k} ${b & m ? 'on' : 'off'}${i === 0 && k === 4 ? ' (AUX cable)' : ''}`);
+      }
+    }
+    if (changes.length) log('NOTE', `online bits changed: ${changes.join(', ')}`, toHex(now));
+  } else {
+    log('INFO', `online bits: ${bitList(now).join(' ') || 'none'}`, toHex(now));
+  }
+  lastOnline = now;
+}
+
+function trackSource() {
+  const s = ampState.source;
+  if (s !== undefined && s !== lastSourceSeen) {
+    if (lastSourceSeen !== undefined) log('NOTE', `source changed: ${lastSourceSeen} → ${s}`);
+    lastSourceSeen = s;
+  }
+}
+
+let lastGood = 0;
+/** What the amp reported just before the link dropped while watching. */
+let beforeDrop: { at: number; state: AmpState } | null = null;
+let reconnecting = false;
+
+/** Reconnect after a drop while watching, then compare the amp's state before and after. */
+async function watchReconnect(device: BluetoothDevice) {
+  if (reconnecting) return;
+  reconnecting = true;
+  beforeDrop = { at: performance.now(), state: { ...ampState } };
+  log('INFO', 'watch: reconnecting every 3 s for up to 60 s');
+  try {
+    const end = performance.now() + 60_000;
+    await new Promise((r) => setTimeout(r, 2000));
+    while (watchTimer && !client && performance.now() < end) {
+      await connect(device);
+      if (!client) await new Promise((r) => setTimeout(r, 3000));
+    }
+    if (!client) log('ERR', 'watch: could not reconnect within 60 s (amp off or still booting?)');
+  } finally {
+    reconnecting = false;
+  }
+}
+
+/** Called after the post-auth reads: log what changed across the drop. */
+function compareAfterDrop() {
+  if (!beforeDrop) return;
+  const a = beforeDrop.state;
+  const b = ampState;
+  const fmt = (v: unknown) => (v === undefined ? '?' : String(v));
+  const secs = ((performance.now() - beforeDrop.at) / 1000).toFixed(1);
+  log(
+    'NOTE',
+    `back after ${secs} s: source ${fmt(a.source)} → ${fmt(b.source)}, phone audio ${fmt(a.a2dp)} → ${fmt(b.a2dp)}, gain ${fmt(a.volume)} → ${fmt(b.volume)}, EQ ${a.eq ? eqName(a.eq.mode) : '?'} → ${b.eq ? eqName(b.eq.mode) : '?'}`,
+    'after a real power-on the amp starts on Bluetooth with the phone disconnected; a source still on AUX points to a link drop or partial reset, not a full restart',
+  );
+  beforeDrop = null;
+}
+
+function setWatch(on: boolean) {
+  clearInterval(watchTimer);
+  watchTimer = undefined;
+  if (!on) return;
+  watchTimer = setInterval(() => {
+    if (!client || !authed || quiet) return;
+    quiet = true;
+    client
+      .request(Op.GetSysInfo, Uint8Array.of(0xff, 0x00, 0x00, 0x00, 0x44))
+      .then(
+        () => (lastGood = performance.now()),
+        (e) => log('ERR', `watch: ${errText(e)}${lastGood ? ` (last good reply ${Math.round(performance.now() - lastGood)} ms ago)` : ''}`),
+      )
+      .finally(() => (quiet = false));
+  }, 1000);
+}
+
 function onReply(f: Frame) {
+  if (f.opcode === Op.GetSysInfo && f.status === 0) trackOnline(f.payload);
   try {
     if (f.opcode === Op.GetTargetInfo && f.status === 0) {
       ampState = applyTargetInfo(ampState, f.payload);
@@ -435,16 +578,19 @@ function onReply(f: Frame) {
   } catch {
     /* parse errors are already shown in the DEC line */
   }
+  trackSource();
+  renderStatus();
 }
 
 function renderSources(mask: number | undefined) {
-  const box = $('source-buttons');
+  const box = $('source-other');
   box.replaceChildren();
   if (mask === undefined) return;
   for (const fn of functionsInMask(mask)) {
-    if (fn > 4) continue; // source switch is defined for 0–4 (spec §6.5)
+    // Bluetooth and AUX have their own buttons; source switch is defined for 0–4 (spec §6.5)
+    if (fn > 4 || fn === FunctionId.Bluetooth || fn === FunctionId.Aux) continue;
     const b = document.createElement('button');
-    b.textContent = `Switch to ${functionName(fn)}`;
+    b.textContent = `${functionName(fn)} (listed by the amp)`;
     b.className = 'needs-conn';
     b.addEventListener('click', () => writeTest(`switch source to ${functionName(fn)}`, Op.Function, Uint8Array.of(FunctionId.Public, fn)));
     box.appendChild(b);
@@ -502,6 +648,8 @@ async function setGain(target: number) {
       current = next;
       lastVolume = next;
       $('gain-val').textContent = String(next);
+      ampState = { ...ampState, volume: next };
+      renderStatus();
       await new Promise((r) => setTimeout(r, timing.gainStepMs));
     }
   } finally {
@@ -611,6 +759,22 @@ function init() {
       );
     void connect(d);
   });
+  $('btn-src-bt').addEventListener('click', () => void writeTest('switch source to Bluetooth (0E)', Op.Function, Uint8Array.of(FunctionId.Public, FunctionId.Bluetooth)));
+  $('btn-src-aux').addEventListener('click', () => void writeTest('switch source to AUX (0E)', Op.Function, Uint8Array.of(FunctionId.Public, FunctionId.Aux)));
+  $('btn-src-usb').addEventListener('click', () => void writeTest('switch source to Music/USB (0E)', Op.Function, Uint8Array.of(FunctionId.Public, FunctionId.Music)));
+  $('btn-sel-usb').addEventListener('click', () => void writeTest('USB via vendor source command (AA 02 08 02 55)', Op.Custom, sourceSelect(2)));
+  $('btn-usb-read').addEventListener('click', () => void request(Op.GetSysInfo, Uint8Array.of(FunctionId.Music, 0xff, 0xff, 0xff, 0xff)));
+  $('btn-online-read').addEventListener('click', () => void request(Op.GetSysInfo, Uint8Array.of(0xff, 0x00, 0x00, 0x00, 0x04)));
+  $('usb-watch').addEventListener('change', () => {
+    const on = $<HTMLInputElement>('usb-watch').checked;
+    log('NOTE', `watch ${on ? 'on' : 'off'}`);
+    setWatch(on);
+  });
+  $('btn-refresh').addEventListener('click', async () => {
+    await request(Op.GetTargetInfo, Payload.targetInfoAll());
+    await request(Op.GetSysInfo, Payload.sysInfoPublicAll());
+  });
+  new ResizeObserver(() => document.documentElement.style.setProperty('--hdr', `${$('top').offsetHeight}px`)).observe($('top'));
   $('btn-sel-aux').addEventListener('click', () => void writeTest('AUX via vendor source command (AA 02 08 03 55)', Op.Custom, sourceSelect(3)));
   $('btn-sel-bt').addEventListener('click', () => void writeTest('Bluetooth via vendor source command (AA 02 08 01 55)', Op.Custom, sourceSelect(1)));
   renderTiming();
@@ -690,7 +854,12 @@ function init() {
       log('ERR', errText(e));
     }
   });
-  $('btn-disc-classic').addEventListener('click', () => void writeTest('disconnect classic BT (opcode 06)', Op.DisconnectClassic, new Uint8Array()));
+  $('btn-disc-classic').addEventListener('click', async () => {
+    await writeTest('disconnect classic BT (opcode 06)', Op.DisconnectClassic, new Uint8Array());
+    // the phone tile comes from GetTargetInfo; read it again once the link has had time to drop
+    await new Promise((r) => setTimeout(r, timing.dropWaitMs));
+    if (client) await request(Op.GetTargetInfo, Payload.targetInfoAll());
+  });
   for (const id of ['send-mode', 'send-op', 'send-hex', 'send-expect']) {
     $(id).addEventListener('input', updatePreview);
   }
@@ -736,6 +905,7 @@ function init() {
   $('btn-clear').addEventListener('click', () => {
     lines.length = 0;
     $('log').replaceChildren();
+    t0 = performance.now();
   });
   setConn('disconnected');
   setAuth('none');

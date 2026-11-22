@@ -8,6 +8,7 @@ For people who want to understand, extend or fork the project. If you just want 
 | [logger.md](logger.md) | The protocol logger page: what each section does and how to capture a useful log |
 | [PROTOCOL.md](PROTOCOL.md) | The Bluetooth protocol: GATT layout, frame format, authentication, commands, Wuzhi-specific frames |
 | [DEVICE_ID_AND_FIRMWARE.md](DEVICE_ID_AND_FIRMWARE.md) | What identifies the amp (SDK type, target-info fields, model query) and what is known about firmware files |
+| [AC6925A-amp-board.md](AC6925A-amp-board.md) | The Bluetooth chip on the amp board: marking, pinout, traced connections, USB pads, download mode |
 | [SDK_EXTRAS.md](SDK_EXTRAS.md) | Jieli SDK commands the vendor app never uses: read-only probes, reverb and limiter, untested writes |
 | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | Every protocol claim we tested on a real ZK-502MT, with the result. Corrections to PROTOCOL.md live here |
 | [DECISIONS.md](DECISIONS.md) | Why the app behaves the way it does, in the order the decisions were made |

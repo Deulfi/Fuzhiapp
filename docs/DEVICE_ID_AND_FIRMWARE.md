@@ -107,6 +107,26 @@ GetTargetInfo reply, decoded. The EDR address and the serial-like part of the pl
 
 Not reported at all: types 13 (MTU), 14, 16 (name), 17 (BLE-only), 19 (supported functions), 31 (custom version). Use the default MTU; take the name from Android.
 
+Later readings from the same amp (ESP32 bridge, several connections) [V]:
+
+- Type 1 flags byte: `00`, `20`, `6b`, `75` on different connections. It is not a fixed capability field; don't read meaning into it.
+- Type 2 status: `00` while no phone or computer is connected for audio, `01` while one is.
+- Type 3: 17 data bytes in total, `01` + 16 ASCII characters. The "17 chars" in the table above is the length including the `01`.
+- Type 7 bootloader bytes: `fe 9f`, `ff 97`, `ff 93`. These change too, so they don't identify the bootloader version either.
+- Type 4 current function: `03` (AUX) when read on AUX.
+
 Model query: `"002"`, `"010"`, `"2203"`, bytes `01 08 00 04 01 08` (see 2.3; the 6 bytes do not match the 180418 the vendor app compares against).
 
 **What this says about the chip:** SDK type 0 (AC692x family) is consistent with the board marking, which identifies a Jieli AC6925A (section 1). Treat the exact variant as likely, not proven.
+
+## 6. What the vendor's firmware files say about this amp (2026-11-22)
+
+A separate analysis looked at the update files the vendor serves (report: `firmware_cleanroom_report.md`, not part of the public docs). Only behaviour and constants were recorded, no code. Everything below is "from firmware, to confirm on the device".
+
+- **None of the files is for the ZK-502MT.** They are built with Jieli's AC695N soundbox SDK for about 1 MB of flash. The AC6925A in the ZK-502MT has 4 Mbit (512 KB) and uses the older AC692x SDK. The vendor app's update file name, `updata.bfu`, is the AC692x container format, which fits the chip. Never put one of these files on a USB stick for this amp: the AC695N builds look for `*.ufw` files on a stick at boot and flash them.
+- **The auth key and `pass` are the same in every file**, so they are not per device. That matches what the app and the ESP32 bridge already use.
+- **Volume:** the ceiling of 30 is a stored setting (`max_vol`), not a fixed limit. There is also a `vol_sync` setting, so some builds push knob changes. Target-info type 1 byte 3 probably holds this; not decoded.
+- **`AA 02 08 80 55`** after the source-select command is most likely a plain ack.
+- **Settings:** the AC695N builds keep volume and EQ in flash. The ZK-502MT does not keep EQ across a power cycle (tested), so its build behaves differently.
+- **Disconnect phone audio while on AUX:** the firmware's disconnect command is not tied to Bluetooth mode in those builds. On the ZK-502MT, opcode 06 only works on Bluetooth (tested).
+- **LED and DSP:** handlers exist in the AC695N builds. The ZK-502MT's empty replies are product configuration.

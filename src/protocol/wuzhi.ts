@@ -64,7 +64,8 @@ export function pairingSet(enabled: boolean, code: string): Uint8Array {
 }
 
 /** Vendor-app source select (§12.4): 1 Bluetooth, 3 AUX. */
-export const sourceSelect = (n: 1 | 3) => dspFrame(WuzhiCmd.SourceSelect, Uint8Array.of(n));
+/** n: 1 Bluetooth, 2 USB, 3 AUX [D §12.2; USB untested]. */
+export const sourceSelect = (n: 1 | 2 | 3) => dspFrame(WuzhiCmd.SourceSelect, Uint8Array.of(n));
 
 const SOURCE_STATE: Record<number, string> = { 1: 'Bluetooth', 3: 'AUX', 5: 'idle (no source)' };
 
