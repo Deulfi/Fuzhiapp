@@ -18,6 +18,8 @@ Clean-room: written from the project's own protocol notes and tests on the user'
 | EQ | select | Normal, Rock, Pop, Classical, Jazz, Country, User |
 | EQ 31 Hz .. EQ 16 kHz | number | the User EQ curve, -12..+12 dB |
 | AUX priority | switch | go back to AUX when the amp leaves it while a cable is in |
+| Mute | switch | gain to 0; off restores the old gain, stepped |
+| Connect to amp | switch | off frees the amp for the PWA or vendor app, kept across reboots |
 | Beep, Beep volume | switch, number | the amp's prompt tones |
 | Disconnect phone audio | button | drops the phone's Bluetooth audio link |
 | AUX cable | binary sensor | cable plugged in |
@@ -26,11 +28,11 @@ Clean-room: written from the project's own protocol notes and tests on the user'
 | Amp firmware, Amp protocol | text sensor | e.g. "V002.10", "2.1" |
 | Forget amp | button | drop the stored amp and find the next one |
 
-Status: all entities tested on a ZK-502MT. No release yet; the first one follows after a few days of everyday use.
+Status: all entities tested on a ZK-502MT, except Mute and Connect to amp (new, not yet tested). No release yet; the first one follows after a few days of everyday use.
 
 ## One connection only
 
-The amp accepts a single control connection. While the bridge is connected, the PWA and the vendor app can't connect, and the other way round. Bluetooth audio from your phone is not affected. If you want to use the PWA or the vendor app, power the bridge off first.
+The amp accepts a single control connection. While the bridge is connected, the PWA and the vendor app can't connect, and the other way round. Bluetooth audio from your phone is not affected. To use the PWA or the vendor app, turn the bridge's Connect to amp switch off (or power the board off).
 
 ## Getting started
 

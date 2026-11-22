@@ -88,6 +88,16 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
 #endif
   void set_aux_priority(bool on);
 
+  // Mute: gain to 0 in one write. Unmute: back to the old gain, stepped, capped.
+#ifdef USE_SWITCH
+  void set_mute_switch(switch_::Switch *s) { this->mute_switch_ = s; }
+  void set_connect_switch(switch_::Switch *s) { this->connect_switch_ = s; }
+#endif
+  void set_mute(bool on);
+  // "Connect to amp": off disconnects and stays disconnected (kept across reboots), freeing
+  // the amp's single control connection for the PWA or the vendor app.
+  void set_connect_enabled(bool on);
+
   // beep (Wuzhi custom 0x02 / 0x12)
 #ifdef USE_SWITCH
   void set_beep_switch(switch_::Switch *s) { this->beep_switch_ = s; }
@@ -140,6 +150,8 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
   void apply_sys_info_(const wuzhi_proto::SysInfo &s, const char *source);
   void step_gain_();
   void publish_gain_();
+  void publish_mute_();
+  void allow_reconnect_();
   void apply_target_info_(const wuzhi_proto::TargetInfo &t);
   void set_source_(wuzhi_proto::Source s, const char *why);
   void publish_source_();
@@ -198,6 +210,16 @@ class WuzhiAmp : public Component, public ble_client::BLEClientNode, public espb
   int gain_target_{-1};
   bool gain_in_flight_{false};
   uint32_t gain_next_at_{0};
+  bool gain_direct_{false};  // next step goes straight to the target (only downwards, for mute)
+
+  // mute
+#ifdef USE_SWITCH
+  switch_::Switch *mute_switch_{nullptr};
+  switch_::Switch *connect_switch_{nullptr};
+#endif
+  bool muted_{false};
+  int gain_before_mute_{-1};
+  bool connect_enabled_{true};
 
   // source, AUX cable, Bluetooth audio
 #ifdef USE_SELECT
@@ -280,6 +302,16 @@ class EqSelect : public select::Select, public Parented<WuzhiAmp> {
 #endif
 
 #ifdef USE_SWITCH
+class MuteSwitch : public switch_::Switch, public Parented<WuzhiAmp> {
+ protected:
+  void write_state(bool state) override { this->parent_->set_mute(state); }
+};
+
+class ConnectSwitch : public switch_::Switch, public Parented<WuzhiAmp> {
+ protected:
+  void write_state(bool state) override { this->parent_->set_connect_enabled(state); }
+};
+
 class BeepSwitch : public switch_::Switch, public Parented<WuzhiAmp> {
  protected:
   void write_state(bool state) override { this->parent_->request_beep(state ? 1 : 0, -1); }

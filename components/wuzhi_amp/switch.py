@@ -11,9 +11,13 @@ DEPENDENCIES = ["wuzhi_amp"]
 
 CONF_AUX_PRIORITY = "aux_priority"
 CONF_BEEP = "beep"
+CONF_MUTE = "mute"
+CONF_CONNECT = "connect"
 
 AuxPrioritySwitch = wuzhi_amp_ns.class_("AuxPrioritySwitch", switch.Switch)
 BeepSwitch = wuzhi_amp_ns.class_("BeepSwitch", switch.Switch)
+MuteSwitch = wuzhi_amp_ns.class_("MuteSwitch", switch.Switch)
+ConnectSwitch = wuzhi_amp_ns.class_("ConnectSwitch", switch.Switch)
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -24,6 +28,16 @@ CONFIG_SCHEMA = cv.Schema(
             AuxPrioritySwitch,
             default_restore_mode="RESTORE_DEFAULT_OFF",
             icon="mdi:priority-high",
+        ),
+        # Gain to 0 in one write; off goes back to the old gain, stepped and capped.
+        cv.Optional(CONF_MUTE): switch.switch_schema(MuteSwitch, icon="mdi:volume-off"),
+        # Off: disconnect and stay disconnected (kept across reboots), so the PWA or the
+        # vendor app can use the amp's single control connection.
+        cv.Optional(CONF_CONNECT): switch.switch_schema(
+            ConnectSwitch,
+            default_restore_mode="RESTORE_DEFAULT_ON",
+            icon="mdi:bluetooth-connect",
+            entity_category=ENTITY_CATEGORY_CONFIG,
         ),
         # The amp's beep (prompt tones). State comes from the amp, nothing is restored.
         cv.Optional(CONF_BEEP): switch.switch_schema(
@@ -39,6 +53,14 @@ async def to_code(config):
         sw = await switch.new_switch(conf)
         await cg.register_parented(sw, amp)
         cg.add(amp.set_aux_priority_switch(sw))
+    if conf := config.get(CONF_MUTE):
+        sw = await switch.new_switch(conf)
+        await cg.register_parented(sw, amp)
+        cg.add(amp.set_mute_switch(sw))
+    if conf := config.get(CONF_CONNECT):
+        sw = await switch.new_switch(conf)
+        await cg.register_parented(sw, amp)
+        cg.add(amp.set_connect_switch(sw))
     if conf := config.get(CONF_BEEP):
         sw = await switch.new_switch(conf)
         await cg.register_parented(sw, amp)

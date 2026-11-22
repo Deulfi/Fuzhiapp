@@ -72,6 +72,31 @@ number:
 - If the amp reports a value above the cap (set by another app), the first write goes straight down to the cap; stepping down from there would send values above it.
 - Unknown until the amp has reported its gain, and after a disconnect. Changes while unknown are ignored.
 
+## Mute
+
+```yaml
+switch:
+  - platform: wuzhi_amp
+    mute:
+      name: Mute
+```
+
+- On: gain to 0 in one write (lowering needs no stepping).
+- Off: back to the gain before muting, stepped like any increase and never above `max_gain`.
+- Changing the gain ends the mute, and so does a gain change made elsewhere.
+
+## Connect to amp
+
+```yaml
+switch:
+  - platform: wuzhi_amp
+    connect:
+      name: Connect to amp
+```
+
+- Off: the bridge disconnects and stays disconnected, so the PWA or the vendor app can use the amp's single control connection. Kept across reboots of the board.
+- On (the default): the bridge connects again.
+
 ## Source
 
 ```yaml

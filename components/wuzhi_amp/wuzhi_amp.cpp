@@ -60,6 +60,16 @@ void WuzhiAmp::setup() {
   this->publish_gain_();  // unknown until the amp reports it
   this->publish_connected_(false);
 #ifdef USE_SWITCH
+  if (this->connect_switch_ != nullptr) {
+    auto initial = this->connect_switch_->get_initial_state_with_restore_mode();
+    this->connect_enabled_ = !initial.has_value() || *initial;
+    this->connect_switch_->publish_state(this->connect_enabled_);
+    if (!this->connect_enabled_) {
+      ESP_LOGI(TAG, "Connect to amp is off: staying disconnected");
+      this->parent()->set_auto_connect(false);
+    }
+  }
+  this->publish_mute_();
   if (this->aux_priority_switch_ != nullptr) {
     auto initial = this->aux_priority_switch_->get_initial_state_with_restore_mode();
     this->aux_priority_ = initial.has_value() && *initial;
@@ -239,7 +249,7 @@ void WuzhiAmp::loop() {
   if (this->reconnect_at_ != 0 && static_cast<int32_t>(now - this->reconnect_at_) >= 0) {
     this->reconnect_at_ = 0;
     ESP_LOGI(TAG, "Back-off over, allowing reconnect");
-    this->parent()->set_auto_connect(true);
+    this->allow_reconnect_();
   }
 
   if (this->link_ == Link::PAIRING && this->pair_deadline_ != 0 &&
@@ -544,6 +554,12 @@ void WuzhiAmp::apply_sys_info_(const proto::SysInfo &s, const char *source) {
   if (s.has_eq) this->apply_eq_(s.eq_mode, s.eq_gains);
   if (s.has_volume) {
     this->gain_current_ = s.volume;
+    if (this->muted_ && s.volume != 0 && this->gain_target_ < 0) {
+      ESP_LOGI(TAG, "Gain changed elsewhere; mute ended");
+      this->muted_ = false;
+      this->gain_before_mute_ = -1;
+      this->publish_mute_();
+    }
     // While stepping, the step replies drive the state and only the end value is published.
     if (!this->gain_in_flight_ && this->gain_target_ < 0) this->publish_gain_();
   }
@@ -570,13 +586,20 @@ void WuzhiAmp::request_gain(float value) {
     target = this->max_gain_;
   }
   ESP_LOGI(TAG, "Gain %d -> %d", this->gain_current_, target);
+  this->gain_direct_ = false;
   this->gain_target_ = target;  // a new value while stepping just moves the target
+  if (this->muted_) {  // a new gain ends the mute
+    this->muted_ = false;
+    this->gain_before_mute_ = -1;
+    this->publish_mute_();
+  }
 }
 
 void WuzhiAmp::step_gain_() {
   if (this->gain_target_ < 0 || this->gain_in_flight_ || this->gain_current_ < 0) return;
   if (this->gain_target_ == this->gain_current_) {
     this->gain_target_ = -1;
+    this->gain_direct_ = false;
     this->publish_gain_();
     return;
   }
@@ -584,8 +607,10 @@ void WuzhiAmp::step_gain_() {
 
   // Above the cap (set elsewhere, e.g. the vendor app): go straight down to the cap, since
   // stepping down would send values above it. Down is the safe direction.
-  const int next = this->gain_current_ > this->max_gain_ ? this->max_gain_
-                                                         : proto::next_gain_step(this->gain_current_, this->gain_target_);
+  int next = this->gain_current_ > this->max_gain_ ? this->max_gain_
+                                                   : proto::next_gain_step(this->gain_current_, this->gain_target_);
+  // Mute: lowering is safe, so it goes in one write.
+  if (this->gain_direct_ && this->gain_target_ < this->gain_current_) next = this->gain_target_;
   proto::Bytes payload = proto::set_gain_payload(next, this->max_gain_);
   if (payload.empty()) {  // can't happen with a clamped target; never send it anyway
     ESP_LOGE(TAG, "Refusing gain %d (cap %d)", next, this->max_gain_);
@@ -912,7 +937,7 @@ void WuzhiAmp::forget_amp() {
   this->adopted_address_ = 0;
   this->backoff_ms_ = 0;
   this->reconnect_at_ = 0;
-  this->parent()->set_auto_connect(true);
+  this->allow_reconnect_();
   if (this->link_ != Link::DISCONNECTED || this->parent()->state() != espbt::ClientState::IDLE) {
     this->parent()->disconnect();
   }
@@ -1092,6 +1117,69 @@ void WuzhiAmp::drop_phone_step_() {
       return;
     default:
       return;
+  }
+}
+
+// --------------------------------------------------------------- mute ---
+
+void WuzhiAmp::publish_mute_() {
+#ifdef USE_SWITCH
+  if (this->mute_switch_ != nullptr) this->mute_switch_->publish_state(this->muted_);
+#endif
+}
+
+void WuzhiAmp::set_mute(bool on) {
+  if (on == this->muted_) {
+    this->publish_mute_();
+    return;
+  }
+  if (this->link_ != Link::READY || this->gain_current_ < 0) {
+    ESP_LOGW(TAG, "Mute ignored: amp not connected or gain not known yet");
+    this->publish_mute_();
+    return;
+  }
+  if (on) {
+    // Remember where it was (or where it was heading).
+    this->gain_before_mute_ = this->gain_target_ >= 0 ? this->gain_target_ : this->gain_current_;
+    this->muted_ = true;
+    ESP_LOGI(TAG, "Mute (gain %d -> 0)", this->gain_before_mute_);
+    this->gain_target_ = 0;
+    this->gain_direct_ = true;
+  } else {
+    int back = this->gain_before_mute_ < 0 ? 0 : this->gain_before_mute_;
+    if (back > this->max_gain_) back = this->max_gain_;
+    this->muted_ = false;
+    this->gain_before_mute_ = -1;
+    ESP_LOGI(TAG, "Unmute (gain -> %d, stepped)", back);
+    this->gain_direct_ = false;
+    this->gain_target_ = back;
+  }
+  this->publish_mute_();
+}
+
+// -------------------------------------------------------- connect switch ---
+
+void WuzhiAmp::allow_reconnect_() {
+  if (this->connect_enabled_) this->parent()->set_auto_connect(true);
+}
+
+void WuzhiAmp::set_connect_enabled(bool on) {
+  this->connect_enabled_ = on;
+#ifdef USE_SWITCH
+  if (this->connect_switch_ != nullptr) this->connect_switch_->publish_state(on);
+#endif
+  if (on) {
+    ESP_LOGI(TAG, "Connect to amp: on");
+    this->backoff_ms_ = 0;
+    this->reconnect_at_ = 0;
+    this->parent()->set_auto_connect(true);
+  } else {
+    ESP_LOGI(TAG, "Connect to amp: off, disconnecting and staying disconnected");
+    this->reconnect_at_ = 0;
+    this->parent()->set_auto_connect(false);
+    if (this->link_ != Link::DISCONNECTED || this->parent()->state() != espbt::ClientState::IDLE) {
+      this->parent()->disconnect();
+    }
   }
 }
 

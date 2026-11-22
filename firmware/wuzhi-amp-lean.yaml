@@ -116,6 +116,10 @@ switch:
   - platform: wuzhi_amp
     aux_priority:
       name: AUX priority
+    mute:
+      name: Mute
+    connect:
+      name: Connect to amp
     beep:
       name: Beep
 
