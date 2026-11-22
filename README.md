@@ -26,7 +26,7 @@ Clean-room: written from the project's own protocol notes and tests on the user'
 | Amp firmware, Amp protocol | text sensor | e.g. "V002.10", "2.1" |
 | Forget amp | button | drop the stored amp and find the next one |
 
-Status: everything except beep, the EQ bands, Disconnect phone audio and the two text sensors has been tested on a ZK-502MT. Those four are built and compile but are not yet tested on the amp.
+Status: all entities tested on a ZK-502MT. No release yet; the first one follows after a few days of everyday use.
 
 ## One connection only
 
